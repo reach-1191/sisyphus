@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Squat Tracker & Form Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Navigation Bar -->
+    <header class="top-nav">
+      <div class="brand">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 20V10"></path>
+            <path d="M12 20V4"></path>
+            <path d="M6 20v-6"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>AI Squat Tracker</h1>
+          <span class="subtitle">MediaPipe Pose Keypoints & Repetition Counter</span>
+        </div>
+      </div>
+      
+      <div class="nav-actions">
+        <div class="status-indicator">
+          <span class="pulse-dot" id="stream-pulse"></span>
+          <span class="status-text" id="stream-status">Ready</span>
+        </div>
+        <button id="btn-reset-top" class="btn btn-secondary">
+          <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+            <path d="M3 3v5h5"></path>
+          </svg>
+          Reset Reps
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Dashboard Grid -->
+    <main class="dashboard-grid">
+      <!-- Left: Video Stream & Source Controls -->
+      <section class="video-section">
+        <div class="card video-card">
+          <div class="video-container">
+            <img id="video-stream" src="{{ url_for('video_feed') }}" alt="MediaPipe Squat Analysis Stream" />
+            <div class="stream-overlay-tag">
+              <span class="badge" id="source-badge">Source: Demo Video</span>
+            </div>
+            <div id="camera-permission-alert" class="camera-alert" style="display: none;">
+              <div class="alert-icon">📷</div>
+              <div class="alert-body">
+                <strong>Camera Access Needed</strong>
+                <p>Please click <b>"Allow"</b> when prompted by your browser to use your computer's webcam.</p>
+              </div>
+            </div>
+          </div>
+          
+          <div class="video-controls">
+            <div class="source-toggle-group">
+              <button class="btn btn-tab btn-cam-toggle" id="btn-browser-camera">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                  <circle cx="12" cy="13" r="4"></circle>
+                </svg>
+                Use Browser Camera
+              </button>
+              <button class="btn btn-tab active" id="btn-sample-source">
+                Demo Video
+              </button>
+              <label class="btn btn-tab upload-label">
+                Upload File
+                <input type="file" id="video-upload-input" accept="video/mp4,video/webm,video/quicktime" style="display:none;">
+              </label>
+            </div>
+            
+            <div class="quick-action">
+              <button id="btn-reset" class="btn btn-danger">
+                Reset Reps (0)
+              </button>
+            </div>
+          </div>
+
+          <!-- Browser Camera Settings Bar (Visible when browser camera is selected) -->
+          <div class="camera-settings-bar" id="camera-settings-bar" style="display: none;">
+            <div class="cam-option">
+              <label for="camera-select">Webcam Device:</label>
+              <select id="camera-select" class="custom-select">
+                <option value="">Default Camera</option>
+              </select>
+            </div>
+            <div class="cam-option mirror-option">
+              <label class="checkbox-label">
+                <input type="checkbox" id="mirror-checkbox" checked>
+                <span>Mirror View (Selfie)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Joint Geometry & Angle Guide Card -->
+        <div class="card info-card">
+          <div class="card-header">
+            <h3>Joint Angle Calculation</h3>
+          </div>
+          <div class="info-content">
+            <div class="joint-steps">
+              <div class="joint-step">
+                <span class="point-badge">A</span>
+                <div>
+                  <strong>Hip Joint</strong>
+                  <p>Keypoints 23 (Left) / 24 (Right)</p>
+                </div>
+              </div>
+              <div class="connector-arrow">&rarr;</div>
+              <div class="joint-step active-step">
+                <span class="point-badge vertex">B</span>
+                <div>
+                  <strong>Knee Joint (Vertex)</strong>
+                  <p>Keypoints 25 (Left) / 26 (Right)</p>
+                </div>
+              </div>
+              <div class="connector-arrow">&rarr;</div>
+              <div class="joint-step">
+                <span class="point-badge">C</span>
+                <div>
+                  <strong>Ankle Joint</strong>
+                  <p>Keypoints 27 (Left) / 28 (Right)</p>
+                </div>
+              </div>
+            </div>
+            <div class="formula-box">
+              <code>Angle = |atan2(y_c - y_b, x_c - x_b) - atan2(y_a - y_b, x_a - x_b)| * 180 / &pi;</code>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right: Real-time Fitness Analytics Dashboard -->
+      <section class="metrics-section">
+        <!-- Rep Counter Hero Card -->
+        <div class="card metric-hero-card">
+          <div class="hero-header">
+            <span class="metric-label">Completed Repetitions</span>
+            <span class="stage-tag" id="stage-badge">UP</span>
+          </div>
+          <div class="hero-body">
+            <div class="reps-number" id="reps-count">0</div>
+            <div class="reps-meta">
+              <span class="meta-label">Active Side:</span>
+              <span class="meta-val" id="active-side">Right Leg</span>
+            </div>
+          </div>
+          <div class="hero-progress">
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" id="depth-progress-bar" style="width: 0%;"></div>
+            </div>
+            <div class="progress-labels">
+              <span>Squat Depth Progress</span>
+              <span id="depth-pct-text">0%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Joint Angles Cards -->
+        <div class="metrics-row">
+          <div class="card metric-card">
+            <span class="metric-label">Current Knee Angle</span>
+            <div class="metric-value-wrap">
+              <span class="metric-big-val" id="knee-angle">180&deg;</span>
+            </div>
+            <div class="angle-target-legend">
+              <span class="legend-dot green"></span> Parallel (&le; <span id="down-th-disp">100</span>&deg;)
+            </div>
+          </div>
+
+          <div class="card metric-card">
+            <span class="metric-label">Exercise Stage</span>
+            <div class="metric-value-wrap">
+              <span class="stage-text" id="stage-text">Standing</span>
+            </div>
+            <div class="angle-target-legend">
+              <span class="legend-dot blue"></span> Upright (&ge; <span id="up-th-disp">155</span>&deg;)
+            </div>
+          </div>
+        </div>
+
+        <!-- Form Feedback & Coaching Banner -->
+        <div class="card feedback-card">
+          <div class="feedback-icon" id="feedback-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+          </div>
+          <div class="feedback-text-wrap">
+            <span class="feedback-title">Real-Time Coach Feedback</span>
+            <p class="feedback-msg" id="feedback-msg">Ready - Stand straight to begin</p>
+          </div>
+        </div>
+
+        <!-- Angle Threshold Calibration Card -->
+        <div class="card settings-card">
+          <div class="card-header">
+            <h3>Angle Threshold Controls</h3>
+          </div>
+          <div class="card-body">
+            <div class="control-slider-group">
+              <div class="slider-header">
+                <label for="down-th-input">Squat Depth Target (Bottom)</label>
+                <span class="slider-val" id="down-th-val">100&deg;</span>
+              </div>
+              <input type="range" id="down-th-input" min="70" max="120" value="100" step="1">
+              <span class="slider-desc">Knee angle required to transition to "DOWN" stage</span>
+            </div>
+
+            <div class="control-slider-group">
+              <div class="slider-header">
+                <label for="up-th-input">Upright Standing Target (Top)</label>
+                <span class="slider-val" id="up-th-val">155&deg;</span>
+              </div>
+              <input type="range" id="up-th-input" min="140" max="175" value="155" step="1">
+              <span class="slider-desc">Knee angle required to complete rep and return to "UP"</span>
+            </div>
+
+            <button id="btn-apply-thresholds" class="btn btn-secondary btn-full">
+              Save Thresholds
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Hidden elements for browser webcam capture -->
+  <video id="client-webcam" playsinline autoplay muted style="display:none;"></video>
+  <canvas id="capture-canvas" style="display:none;"></canvas>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
