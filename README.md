@@ -1,42 +1,43 @@
-# AI Squat Tracker & Form Analyzer (Flask + MediaPipe Pose)
+# AI Vocal Fitness Coach (Flask + MediaPipe Pose)
 
-An AI-powered computer vision application built with **Flask**, **MediaPipe Pose**, and **OpenCV** that accesses the computer's video camera within the browser, tracks body keypoints for squats, computes real-time knee joint angles, detects rep completion, and streams the processed video feed to a web dashboard.
-
----
-
-## Features
-
-- **Direct In-Browser Webcam Access (`getUserMedia`)**:
-  - Accesses the computer's webcam directly inside the browser using the HTML5 `MediaDevices.getUserMedia()` API.
-  - Works across client laptops, desktops, and mobile devices even when running Flask on a remote or headless server.
-  - Device selector for switching between front/back/USB webcams.
-  - "Mirror View (Selfie)" toggle for natural mirror preview.
-- **MediaPipe Pose Keypoint Tracking**: Tracks 33 3D body keypoints, highlighting hips (23/24), knees (25/26), and ankles (27/28) with dynamic skeleton overlays.
-- **Knee Joint Angle Calculation**: Calculates the knee joint angle formed by Hip $\rightarrow$ Knee (vertex) $\rightarrow$ Ankle using trigonometry:
-  $$\theta = |\text{atan2}(y_{\text{ankle}} - y_{\text{knee}}, x_{\text{ankle}} - x_{\text{knee}}) - \text{atan2}(y_{\text{hip}} - y_{\text{knee}}, x_{\text{hip}} - x_{\text{knee}})| \times \frac{180}{\pi}$$
-- **Automated Repetition Counter**: State machine (`UP` $\leftrightarrow$ `DOWN`):
-  - **Down Stage**: Triggered when knee angle drops below the squat target threshold (default $\le 100^\circ$).
-  - **Up Stage (Rep Complete)**: Triggered when user returns to upright standing posture (default $\ge 155^\circ$), incrementing the counter and triggering visual celebration feedback.
-- **Real-Time Video HUD Overlay**: Renders Rep Count, Exercise Stage, Knee Angle badge, Squat Depth Meter, and Coaching Feedback directly on the video feed.
-- **Multi-Source Support**:
-  - **Browser Camera**: Uses the computer's camera in the browser.
-  - **Demo Squat Video**: Built-in demonstration video (`sample_squat.mp4`) for testing without a camera.
-  - **Custom Video Upload**: Upload custom workout clips to analyze form.
+A real-time AI-powered exercise form tracker built with **Flask**, **MediaPipe Pose**, and **OpenCV** with an **in-browser AI Vocal Coach** (Web Speech API), supporting both **Squats** and **Push-Ups**.
 
 ---
 
-## Installation & Setup
+## Key Features
 
-1. **Install dependencies:**
+1. **Dual Exercise Support**:
+   - **Squats**: Tracks Hip-Knee-Ankle angles (EMA smoothed). Detects deep squat depth ($\le 100^\circ$) vs. shallow depth, and identifies knee cave (valgus) when knees move inward.
+   - **Push-Ups**: Tracks Shoulder-Elbow-Wrist angle (chest depth $\le 90^\circ$), Shoulder-Hip-Ankle spine alignment ($\ge 160^\circ$ straight plank), and Shoulder-Hip-Elbow flare angle ($> 75^\circ$ warning).
+
+2. **Real-Time AI Vocal Coach (Web Speech API)**:
+   - Uses `window.speechSynthesis` for vocal coaching.
+   - Speaks completed repetition counts ("One! Perfect depth", "Two! Keep knees out").
+   - 3-second debounce throttle preventing repetitive vocal nagging.
+   - Mute / Unmute audio toggle button.
+
+3. **Form Quality Score (0–100%)**:
+   - Evaluates execution fidelity per rep with real-time feedback and deductions for form faults.
+
+4. **Single-File Architecture & Google Cloud Shell Support**:
+   - Everything contained in [`app.py`](app.py) with embedded modern dark HTML5/CSS3 interface.
+   - Bound to `0.0.0.0:8080` for immediate Google Cloud Shell Web Preview.
+   - Graceful camera disconnect handling with automatic demo video fallback and browser webcam (`getUserMedia`) support.
+
+---
+
+## Running the Application
+
+1. **Install requirements:**
    ```bash
    pip install -r requirements.txt
    ```
 
-2. **Start the Flask web app:**
+2. **Launch the server:**
    ```bash
    python3 app.py
    ```
 
-3. **Open in browser:**
-   Navigate to `http://localhost:5000`.
-   - Click **"Use Browser Camera"** to grant camera access and start live squat tracking.
+3. **Access the Web Dashboard:**
+   - **Local**: `http://localhost:8080`
+   - **Google Cloud Shell**: Click **Web Preview** -> **Preview on port 8080**
