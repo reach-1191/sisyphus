@@ -16,7 +16,7 @@ Try it here: [Sisyphus Live App](https://sisyphus-783417011137.northamerica-nort
 
 ---
 
-## What's New in Recent Updates
+## Features:
 
 - ⚡ **Adaptive 1€ Filter (One Euro Filter) Motion Tracking**:
   - Replaced rigid static filtering with adaptive velocity-aware 1€ filters (Casiez et al., 2012) on joint angles and 2D keypoints.
