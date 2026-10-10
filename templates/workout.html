@@ -1144,7 +1144,7 @@ setInterval(() => {
 }, 1000);
 
 // ==============================================================================
-// 7. SKELETON OVERLAY RENDERER ON HTML5 CANVAS
+// 7. SKELETON OVERLAY RENDERER ON HTML5 CANVAS (HARDWARE-ACCELERATED & BATCHED)
 // ==============================================================================
 
 const poseOverlayCanvas = document.getElementById("pose-overlay-canvas");
@@ -1152,13 +1152,25 @@ const poseCtx = poseOverlayCanvas ? poseOverlayCanvas.getContext("2d") : null;
 
 function renderSkeleton(landmarks, w, h) {
   if (!poseOverlayCanvas || !poseCtx) return;
-  if (poseOverlayCanvas.width !== w || poseOverlayCanvas.height !== h) {
-    poseOverlayCanvas.width = w;
-    poseOverlayCanvas.height = h;
+
+  // High-DPI Canvas Scaling: match window.devicePixelRatio crisply without lagging
+  const dpr = window.devicePixelRatio || 1;
+  const targetW = Math.round(w * dpr);
+  const targetH = Math.round(h * dpr);
+
+  if (poseOverlayCanvas.width !== targetW || poseOverlayCanvas.height !== targetH) {
+    poseOverlayCanvas.width = targetW;
+    poseOverlayCanvas.height = targetH;
   }
 
+  poseCtx.save();
+  poseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   poseCtx.clearRect(0, 0, w, h);
-  if (!landmarks || landmarks.length === 0) return;
+
+  if (!landmarks || landmarks.length === 0) {
+    poseCtx.restore();
+    return;
+  }
 
   const connections = [
     [11, 12], [11, 23], [12, 24], [23, 24],
@@ -1170,7 +1182,7 @@ function renderSkeleton(landmarks, w, h) {
   const strokeColor = hasWarnings ? "rgb(239, 68, 68)" : "rgb(250, 204, 21)";
   const glowColor = hasWarnings ? "rgba(239, 68, 68, 0.6)" : "rgba(250, 204, 21, 0.6)";
 
-  // Draw connections (limbs)
+  // Optimized Draw Routine #1: Batched context path calls for skeleton bones
   poseCtx.save();
   poseCtx.lineWidth = 3.5;
   poseCtx.lineCap = "round";
@@ -1178,42 +1190,55 @@ function renderSkeleton(landmarks, w, h) {
   poseCtx.shadowColor = glowColor;
   poseCtx.shadowBlur = 6;
 
+  poseCtx.beginPath();
   for (const [i1, i2] of connections) {
     const p1 = landmarks[i1];
     const p2 = landmarks[i2];
     if (p1 && p2 && (p1.visibility || 1) > 0.3 && (p2.visibility || 1) > 0.3) {
-      poseCtx.beginPath();
       poseCtx.moveTo(p1.x * w, p1.y * h);
       poseCtx.lineTo(p2.x * w, p2.y * h);
-      poseCtx.stroke();
     }
   }
+  poseCtx.stroke();
   poseCtx.restore();
 
-  // Draw joint keypoints
+  // Optimized Draw Routine #2: Batched context path calls for joint nodes
   const keyJoints = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+
+  // Batch outer rings
+  poseCtx.save();
+  poseCtx.lineWidth = 2;
+  poseCtx.strokeStyle = strokeColor;
+  poseCtx.beginPath();
   for (const idx of keyJoints) {
     const pt = landmarks[idx];
     if (pt && (pt.visibility || 1) > 0.3) {
       const px = pt.x * w;
       const py = pt.y * h;
-
-      // Inner point
-      poseCtx.beginPath();
-      poseCtx.arc(px, py, 4.5, 0, Math.PI * 2);
-      poseCtx.fillStyle = "#ffffff";
-      poseCtx.fill();
-
-      // Outer ring
-      poseCtx.beginPath();
+      poseCtx.moveTo(px + 6.5, py);
       poseCtx.arc(px, py, 6.5, 0, Math.PI * 2);
-      poseCtx.lineWidth = 2;
-      poseCtx.strokeStyle = strokeColor;
-      poseCtx.stroke();
     }
   }
+  poseCtx.stroke();
+  poseCtx.restore();
 
-  // Highlight key active tracked joint
+  // Batch inner core dots
+  poseCtx.save();
+  poseCtx.fillStyle = "#ffffff";
+  poseCtx.beginPath();
+  for (const idx of keyJoints) {
+    const pt = landmarks[idx];
+    if (pt && (pt.visibility || 1) > 0.3) {
+      const px = pt.x * w;
+      const py = pt.y * h;
+      poseCtx.moveTo(px + 4.5, py);
+      poseCtx.arc(px, py, 4.5, 0, Math.PI * 2);
+    }
+  }
+  poseCtx.fill();
+  poseCtx.restore();
+
+  // Draw highlighted active tracked joint indicator
   let activeJointIdx = null;
   if (tracker.exercise === "squat") {
     activeJointIdx = tracker.activeSide === "right" ? 26 : 25;
@@ -1223,23 +1248,27 @@ function renderSkeleton(landmarks, w, h) {
 
   if (activeJointIdx !== null && landmarks[activeJointIdx]) {
     const apt = landmarks[activeJointIdx];
-    const ax = apt.x * w;
-    const ay = apt.y * h;
+    if ((apt.visibility || 1) > 0.3) {
+      const ax = apt.x * w;
+      const ay = apt.y * h;
 
-    poseCtx.save();
-    poseCtx.beginPath();
-    poseCtx.arc(ax, ay, 12, 0, Math.PI * 2);
-    poseCtx.lineWidth = 3;
-    poseCtx.strokeStyle = "#ffffff";
-    poseCtx.shadowColor = strokeColor;
-    poseCtx.shadowBlur = 12;
-    poseCtx.stroke();
-    poseCtx.restore();
+      poseCtx.save();
+      poseCtx.beginPath();
+      poseCtx.arc(ax, ay, 12, 0, Math.PI * 2);
+      poseCtx.lineWidth = 3;
+      poseCtx.strokeStyle = "#ffffff";
+      poseCtx.shadowColor = strokeColor;
+      poseCtx.shadowBlur = 12;
+      poseCtx.stroke();
+      poseCtx.restore();
+    }
   }
+
+  poseCtx.restore(); // Restore outer DPI transform
 }
 
 // ==============================================================================
-// 8. MEDIAPIPE POSE CLIENT-SIDE INTEGRATION & RAF PIPELINE
+// 8. BASE44 MOTION ARCHITECTURE: DECOUPLED ML & 60/120 FPS LERP RENDER PIPELINE
 // ==============================================================================
 
 const workoutVideo = document.getElementById("workout-video");
@@ -1267,12 +1296,18 @@ let webcamStream = null;
 let isCameraPaused = false;
 let isProcessingFrame = false;
 let poseInstance = null;
-let animFrameId = null;
 
-// Initialize MediaPipe Pose
+// Decoupled loop state and LERP buffer array
+let inferenceAnimId = null;
+let renderAnimId = null;
+let targetLandmarks = null;
+let lerpLandmarks = null;
+
+// Initialize MediaPipe Pose with Decoupled Callback Architecture
 function initMediaPipePose() {
   if (typeof Pose === "undefined") {
-    console.error("MediaPipe Pose library not yet loaded via CDN.");
+    console.warn("MediaPipe Pose library not yet loaded via CDN. Retrying in 100ms...");
+    setTimeout(initMediaPipePose, 100);
     return;
   }
 
@@ -1289,6 +1324,8 @@ function initMediaPipePose() {
     minTrackingConfidence: 0.5
   });
 
+  // MediaPipe callback decoupled from HTML5 Canvas rendering:
+  // Updates filtered target coordinates and kinematics telemetry without touching canvas directly
   poseInstance.onResults((results) => {
     isProcessingFrame = false;
     const vw = workoutVideo.videoWidth || 640;
@@ -1296,18 +1333,65 @@ function initMediaPipePose() {
     const tNow = performance.now() / 1000.0;
 
     const res = tracker.processFrame(results.poseLandmarks, vw, vh, tNow);
-    if (res) {
-      renderSkeleton(res.landmarks, vw, vh);
+    if (res && res.landmarks) {
+      // Store One-Euro filtered coordinates as the LERP target
+      targetLandmarks = res.landmarks;
       updateTelemetryUI(res.repIncremented);
     } else {
-      renderSkeleton(null, vw, vh);
+      targetLandmarks = null;
       updateTelemetryUI(false);
     }
   });
 }
 
-// 60 FPS requestAnimationFrame rendering loop
-async function trackingLoop() {
+// Dedicated 60/120 FPS Rendering Loop using native requestAnimationFrame()
+function renderLoop() {
+  renderAnimId = requestAnimationFrame(renderLoop);
+
+  const vw = workoutVideo.videoWidth || 640;
+  const vh = workoutVideo.videoHeight || 480;
+
+  if (isCameraPaused) {
+    renderSkeleton(null, vw, vh);
+    lerpLandmarks = null;
+    return;
+  }
+
+  if (targetLandmarks && targetLandmarks.length > 0) {
+    if (!lerpLandmarks || lerpLandmarks.length !== targetLandmarks.length) {
+      // Initialize LERP buffer array directly to target coordinates on first detection
+      lerpLandmarks = targetLandmarks.map(lm => ({
+        x: lm.x,
+        y: lm.y,
+        z: lm.z !== undefined ? lm.z : 0,
+        visibility: lm.visibility !== undefined ? lm.visibility : 1.0
+      }));
+    } else {
+      // LERP (Linear Interpolation) Buffer Array:
+      // current_pos = current_pos + (target_pos - current_pos) * 0.25
+      const LERP_FACTOR = 0.25;
+      for (let i = 0; i < targetLandmarks.length; i++) {
+        const target = targetLandmarks[i];
+        const current = lerpLandmarks[i];
+        current.x += (target.x - current.x) * LERP_FACTOR;
+        current.y += (target.y - current.y) * LERP_FACTOR;
+        if (target.z !== undefined && current.z !== undefined) {
+          current.z += (target.z - current.z) * LERP_FACTOR;
+        }
+        if (target.visibility !== undefined && current.visibility !== undefined) {
+          current.visibility += (target.visibility - current.visibility) * LERP_FACTOR;
+        }
+      }
+    }
+    renderSkeleton(lerpLandmarks, vw, vh);
+  } else {
+    lerpLandmarks = null;
+    renderSkeleton(null, vw, vh);
+  }
+}
+
+// Decoupled Asynchronous ML Inference Loop
+async function inferenceLoop() {
   if (!isCameraPaused && workoutVideo && workoutVideo.readyState >= 2 && !workoutVideo.paused) {
     if (!isProcessingFrame && poseInstance) {
       isProcessingFrame = true;
@@ -1318,13 +1402,15 @@ async function trackingLoop() {
       }
     }
   }
-  animFrameId = requestAnimationFrame(trackingLoop);
+  inferenceAnimId = requestAnimationFrame(inferenceLoop);
 }
 
 // Setup Demo Video Source
 function setDemoSource(exerciseName) {
   stopWebcamStream();
   if (videoFeedWrapper) videoFeedWrapper.classList.remove("mirrored");
+  targetLandmarks = null;
+  lerpLandmarks = null;
 
   const videoUrl = DEMO_VIDEOS[exerciseName] || DEMO_VIDEOS.squat;
   workoutVideo.srcObject = null;
@@ -1353,6 +1439,9 @@ async function setWebcamSource() {
     if (feedbackMsg) feedbackMsg.textContent = "Requesting browser camera permission...";
 
     stopWebcamStream();
+    targetLandmarks = null;
+    lerpLandmarks = null;
+
     webcamStream = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
       audio: false
@@ -1388,6 +1477,9 @@ function stopWebcamStream() {
 // Exercise Mode Switcher
 function switchExercise(ex) {
   tracker.setExercise(ex);
+  targetLandmarks = null;
+  lerpLandmarks = null;
+
   modePills.forEach(p => {
     if (p.getAttribute("data-exercise") === ex) {
       p.classList.add("active");
@@ -1413,6 +1505,8 @@ modePills.forEach(pill => {
 sourceSelect.addEventListener("change", (e) => {
   const sel = e.target.value;
   currentInputSource = sel;
+  targetLandmarks = null;
+  lerpLandmarks = null;
   if (sel === "webcam" || sel === "browser_cam") {
     setWebcamSource();
   } else {
@@ -1427,8 +1521,10 @@ btnPauseCamera.addEventListener("click", () => {
     pauseIcon.textContent = "▶️";
     pauseText.textContent = "Resume Feed";
     workoutVideo.pause();
+    targetLandmarks = null;
+    lerpLandmarks = null;
     if (poseCtx && poseOverlayCanvas) {
-      poseCtx.clearRect(0, 0, poseOverlayCanvas.width, poseOverlayCanvas.height);
+      renderSkeleton(null, workoutVideo.videoWidth || 640, workoutVideo.videoHeight || 480);
     }
   } else {
     pauseIcon.textContent = "⏸️";
@@ -1454,6 +1550,8 @@ btnVoiceToggle.addEventListener("click", () => {
 // Reset Reps Button
 btnResetSession.addEventListener("click", () => {
   tracker.resetReps();
+  targetLandmarks = null;
+  lerpLandmarks = null;
   updateTelemetryUI(false);
 });
 
@@ -1507,9 +1605,25 @@ if (workoutSaveForm) {
   });
 }
 
-// Window Cleanup
-window.addEventListener("pagehide", stopWebcamStream);
-window.addEventListener("beforeunload", stopWebcamStream);
+// Loop and Stream Cleanup
+function cleanupLoops() {
+  if (inferenceAnimId) {
+    cancelAnimationFrame(inferenceAnimId);
+    inferenceAnimId = null;
+  }
+  if (renderAnimId) {
+    cancelAnimationFrame(renderAnimId);
+    renderAnimId = null;
+  }
+}
+window.addEventListener("pagehide", () => {
+  cleanupLoops();
+  stopWebcamStream();
+});
+window.addEventListener("beforeunload", () => {
+  cleanupLoops();
+  stopWebcamStream();
+});
 
 // Initialize on DOM load
 document.addEventListener("DOMContentLoaded", () => {
@@ -1523,7 +1637,8 @@ document.addEventListener("DOMContentLoaded", () => {
   initMediaPipePose();
   switchExercise(initialEx);
   setDemoSource(initialEx);
-  trackingLoop();
+  inferenceLoop();
+  renderLoop();
 });
 </script>
 {% endblock %}
