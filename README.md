@@ -18,43 +18,39 @@ Try it here: [Sisyphus Live App](https://sisyphus-783417011137.northamerica-nort
 
 ## Features:
 
-- ⚡ **Adaptive 1€ Filter (One Euro Filter) Motion Tracking**:
+-  **Adaptive 1€ Filter (One Euro Filter) Motion Tracking**:
   - Replaced rigid static filtering with adaptive velocity-aware 1€ filters (Casiez et al., 2012) on joint angles and 2D keypoints.
   - Eradicates high-frequency spatial jitter during static holds (planks, squat pauses) while eliminating latency and phase lag on rapid explosive ascents.
-- 🎯 **Landmark Jitter Reduction & Confidence Weighting**:
+-  **Landmark Jitter Reduction & Confidence Weighting**:
   - Independent 2D coordinate smoothing on all primary keypoints with visibility-based confidence weighting (`visibility >= 0.35`).
   - Gracefully bridges momentary single-frame occlusions without dropping skeleton tracking or triggering false "no person detected" flickers.
-- 📐 **Active Side Kinematic Hysteresis**:
+-  **Active Side Kinematic Hysteresis**:
   - Added visibility threshold hysteresis (`0.15` margin) to prevent rapid alternating between left and right limb tracking when facing the camera.
-- 🏋️ **Repetition Kinematic & Depth Precision**:
+-  **Repetition Kinematic & Depth Precision**:
   - Fixed premature shallow depth deductions: reaching valid depth ($\le 100^\circ$) confirms depth compliance and clears premature deductions.
   - Optimized dumbbell curl peak contraction threshold ($\le 45^\circ$) for realistic biomechanical range of motion.
-- 🌐 **In-Browser Webcam Integration (WebRTC / `getUserMedia`)**:
+-  **In-Browser Webcam Integration (WebRTC / `getUserMedia`)**:
   - Fixed client-side browser webcam pipeline: captures local camera video stream via `navigator.mediaDevices.getUserMedia`, mirrors frames on a hidden canvas for intuitive selfie viewing, and posts frames to `/process_frame`.
   - Server processes each webcam frame with MediaPipe pose estimation, draws crisp anti-aliased HUD skeleton overlays with active joint ring highlights, and streams annotated frames back to the client alongside dynamic `X-Metrics` telemetry headers.
   - Safe lifecycle management: releases camera hardware tracks on mode changes, pauses, and page unloads.
-- 🐳 **Docker Containerization**: Full production-ready `Dockerfile` (Python 3.10-slim with OpenCV/FFmpeg system libraries) and `.dockerignore` for single-command builds and isolated deployment on any cloud or container platform.
-- 📊 **Post-Workout Form Analytics & Coach Summary (`/summary/<session_id>`)**:
+  - **Docker Containerization**: Full production-ready `Dockerfile` (Python 3.10-slim with OpenCV/FFmpeg system libraries) and `.dockerignore` for single-command builds and isolated deployment on any cloud or container platform.
+- **Post-Workout Form Analytics & Coach Summary (`/summary/<session_id>`)**:
   - **Dynamic 'Coach Insights' Feedback Card**: Prominent Bento card styled in dark charcoal (`#18181b`) with vibrant warm yellow accent borders (`#facc15`), providing ultra-concise, affirmative **Positive Encouragement** and actionable **Technical Improvement Tips** tailored per exercise (under 12 words per sentence, strictly prohibiting litotes or double negatives). Displays flawless precision guidance when session accuracy reaches or exceeds 90%.
   - **Form Status Rating**: Classifies movement quality into **Optimal** (≥ 85%), **Moderate** (70–84%), or **Needs Adjustment** (< 70%).
   - **Biomechanical Precision Feedback**: Exercise-specific movement reviews (depth consistency, joint alignment, descent tempo, spinal plank alignment, tucked elbow flare protection, peak bicep contraction, and eccentric control).
   - **Frame-Accurate Form Score**: Dynamically calculated using valid repetition frame ratios against flagged kinematic warnings:
     $$\text{Form Accuracy} = \frac{\text{Valid Rep Frames}}{\text{Valid Rep Frames} + \text{Form Warnings}} \times 100\%$$
   - **Session Rewards**: Displays EXP earned (with form score bonus multiplier), current level progress, and unlocked achievement badges.
-- 🔐 **Dedicated Authentication Suite**:
+- **Dedicated Authentication Suite**:
   - Independent auth views (`login.html`, `register.html`, `layout.html`) with Bento-inspired aesthetic, validation, and session management.
   - Password hashing via Werkzeug PBKDF2 and session cookies via Flask-Login.
-- 🎯 **Adaptive Athlete Dashboard**:
+-  **Adaptive Athlete Dashboard**:
   - Contextual greetings: First-time athletes receive a tailored welcome and Quick Onboarding Guide; returning athletes see streak counters, total reps, and level badges.
   - Visual exercise selection cards with targeted muscle groups (Glutes / Legs for Squats, Chest / Core for Push-ups, Biceps for Dumbbell Curls).
-- 📹 **Optimized Headless Demo Fallbacks**:
+  - **Optimized Headless Demo Fallbacks**:
   - High-definition fallback demo videos for all three supported exercises (`squat_demo.mp4`, `pushup_demo.mp4`, `dumbbell_demo.mp4`), enabling out-of-the-box testing without a webcam.
-- 🧪 **Comprehensive Automated Test Suite**:
+- **Comprehensive Automated Test Suite**:
   - 28 automated unit and integration tests in `test_app.py` covering OneEuroFilter, LandmarkSmoother, browser webcam streaming, kinematics, auth flows, camera lifecycle, EXP/badges, audio alerts, and summary views.
-
----
-
-## Key Features
 
 - **Bento Box UI Layout**: Dynamic, responsive aesthetic organizing live camera feed, real-time joint angle gauges, rep velocity, workout history, and EXP progress into intuitive modular cards.
 - **Multi-Exercise Pose Estimation**:
