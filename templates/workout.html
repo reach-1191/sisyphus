@@ -28,7 +28,7 @@
           <span id="hud-stage-pill" class="hud-stage-pill">UP</span>
         </div>
 
-        <!-- Top Right: Rep Counter Pill Badge with Warm Yellow Accent Glow & Particle Burst Target -->
+        <!-- Top Right: Rep Counter Pill Badge with Warm Yellow Accent Glow -->
         <div class="hud-pill-group hud-rep-pill" id="hud-rep-pill-container">
           <span class="hud-rep-label">REPS</span>
           <span id="hud-rep-count" class="hud-rep-val">0</span>
@@ -46,9 +46,6 @@
           <span id="hud-score-pill" class="hud-score-pill">100%</span>
         </div>
       </div>
-
-      <!-- Canvas Overlay for Floating Rep Particles -->
-      <canvas id="rep-particles-canvas" class="particles-canvas"></canvas>
     </div>
 
     <!-- Mode Selector Bar (Warm Yellow Buttons & Pills) -->
@@ -325,19 +322,76 @@ function calculateElbowFlare(shoulder, hip, elbow) {
 
 let audioCtx = null;
 let audioUnlocked = false;
+let repChimeBuffer = null;
 let voiceEnabled = true;
 let selectedVoice = null;
 let lastSpokenTime = 0;
+
+function createChimeWavBuffer(sampleRate = 44100, duration = 0.28, freq = 880) {
+  const numSamples = Math.floor(sampleRate * duration);
+  const buffer = new ArrayBuffer(44 + numSamples * 2);
+  const view = new DataView(buffer);
+
+  const writeString = (offset, string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + numSamples * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true); // 16-bit
+  writeString(36, 'data');
+  view.setUint32(40, numSamples * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < numSamples; i++) {
+    const t = i / sampleRate;
+    const envelope = Math.exp(-t * 12);
+    const sample = (Math.sin(2 * Math.PI * freq * t) * 0.8 + Math.sin(2 * Math.PI * freq * 2 * t) * 0.2) * envelope;
+    const clamped = Math.max(-1, Math.min(1, sample));
+    view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF, true);
+    offset += 2;
+  }
+  return buffer;
+}
+
+function initRepChimeBuffer(ctx) {
+  if (!ctx || repChimeBuffer) return;
+  try {
+    const wav = createChimeWavBuffer();
+    // Pre-decode chime audio buffer with AudioContext.decodeAudioData for zero-latency rep sound playback
+    ctx.decodeAudioData(wav, (decoded) => {
+      repChimeBuffer = decoded;
+    }, (err) => {
+      console.warn("decodeAudioData failed, falling back to synthesized chime:", err);
+    });
+  } catch (err) {
+    console.warn("Failed to initiate decodeAudioData for rep chime:", err);
+  }
+}
 
 function getAudioContext() {
   if (!audioCtx) {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (AudioContextClass) {
       audioCtx = new AudioContextClass();
+      initRepChimeBuffer(audioCtx);
     }
   }
   if (audioCtx && audioCtx.state === "suspended") {
     audioCtx.resume();
+  }
+  if (audioCtx && !repChimeBuffer) {
+    initRepChimeBuffer(audioCtx);
   }
   return audioCtx;
 }
@@ -346,6 +400,20 @@ function playRepChime() {
   try {
     const ctx = getAudioContext();
     if (!ctx) return;
+
+    // Zero-latency playback from pre-decoded AudioBuffer
+    if (repChimeBuffer) {
+      const source = ctx.createBufferSource();
+      source.buffer = repChimeBuffer;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.35, ctx.currentTime);
+      source.connect(gain);
+      gain.connect(ctx.destination);
+      source.start(0);
+      return;
+    }
+
+    // Dynamic oscillator fallback if buffer decoding is not yet resolved
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -390,7 +458,10 @@ if (window.speechSynthesis) {
 }
 
 function unlockAudio() {
-  getAudioContext();
+  const ctx = getAudioContext();
+  if (ctx) {
+    initRepChimeBuffer(ctx);
+  }
   if (!audioUnlocked && window.speechSynthesis) {
     try {
       const dummy = new SpeechSynthesisUtterance("");
@@ -412,114 +483,34 @@ function speakFormError(errorMessage) {
   if (!voiceEnabled || !window.speechSynthesis || !errorMessage) return;
   const now = Date.now();
   if (now - lastSpokenTime < 4000) return; // 4-second throttle
+  lastSpokenTime = now;
 
-  try {
-    window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(errorMessage);
-    if (!selectedVoice) loadBestVoice();
-    if (selectedVoice) {
-      utter.voice = selectedVoice;
-      utter.lang = selectedVoice.lang || "en-US";
+  // Asynchronous non-blocking Web Speech API calls (requestIdleCallback / setTimeout) so voice coaching never causes frame drops
+  const scheduleSpeech = typeof window.requestIdleCallback === "function"
+    ? (cb) => window.requestIdleCallback(cb, { timeout: 120 })
+    : (cb) => setTimeout(cb, 0);
+
+  scheduleSpeech(() => {
+    try {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(errorMessage);
+      if (!selectedVoice) loadBestVoice();
+      if (selectedVoice) {
+        utter.voice = selectedVoice;
+        utter.lang = selectedVoice.lang || "en-US";
+      }
+      utter.pitch = 1.0;
+      utter.rate = 1.05;
+      utter.volume = 1.0;
+      window.speechSynthesis.speak(utter);
+    } catch (e) {
+      console.warn("Speech error:", e);
     }
-    utter.pitch = 1.0;
-    utter.rate = 1.05;
-    utter.volume = 1.0;
-    window.speechSynthesis.speak(utter);
-    lastSpokenTime = now;
-  } catch (e) {
-    console.warn("Speech error:", e);
-  }
+  });
 }
 
 // ==============================================================================
-// 4. REP PARTICLES CANVAS BURST EFFECT
-// ==============================================================================
-
-const particlesCanvas = document.getElementById("rep-particles-canvas");
-const pCtx = particlesCanvas ? particlesCanvas.getContext("2d") : null;
-let particles = [];
-let particleAnimationId = null;
-
-function resizeParticlesCanvas() {
-  if (particlesCanvas && particlesCanvas.parentElement) {
-    const pw = particlesCanvas.parentElement.clientWidth;
-    const ph = particlesCanvas.parentElement.clientHeight;
-    if (particlesCanvas.width !== pw || particlesCanvas.height !== ph) {
-      particlesCanvas.width = pw;
-      particlesCanvas.height = ph;
-    }
-  }
-}
-window.addEventListener("resize", resizeParticlesCanvas, { passive: true });
-resizeParticlesCanvas();
-
-function renderParticles() {
-  if (!particlesCanvas || !pCtx) {
-    particleAnimationId = null;
-    return;
-  }
-  pCtx.clearRect(0, 0, particlesCanvas.width, particlesCanvas.height);
-  if (particles.length === 0) {
-    particleAnimationId = null;
-    return;
-  }
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const p = particles[i];
-    p.x += p.vx;
-    p.y += p.vy;
-    p.vy += 0.12;
-    p.alpha -= p.decay;
-    if (p.alpha <= 0) {
-      particles.splice(i, 1);
-      continue;
-    }
-    pCtx.save();
-    pCtx.globalAlpha = p.alpha;
-    pCtx.fillStyle = p.color;
-    pCtx.shadowBlur = 8;
-    pCtx.shadowColor = p.color;
-    pCtx.beginPath();
-    pCtx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-    pCtx.fill();
-    pCtx.restore();
-  }
-  if (particles.length > 0) {
-    particleAnimationId = requestAnimationFrame(renderParticles);
-  } else {
-    pCtx.clearRect(0, 0, particlesCanvas.width, particlesCanvas.height);
-    particleAnimationId = null;
-  }
-}
-
-function triggerRepParticleBurst() {
-  if (!particlesCanvas || !pCtx) return;
-  resizeParticlesCanvas();
-  const cx = particlesCanvas.width - 70;
-  const cy = 35;
-  const count = 28;
-  const colors = ["#facc15", "#fde047", "#ffffff", "#eab308", "#f59e0b"];
-
-  for (let i = 0; i < count; i++) {
-    const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5;
-    const speed = Math.random() * 5 + 3;
-    particles.push({
-      x: cx,
-      y: cy,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
-      radius: Math.random() * 3.5 + 2,
-      color: colors[Math.floor(Math.random() * colors.length)],
-      alpha: 1.0,
-      decay: Math.random() * 0.03 + 0.02
-    });
-  }
-  if (!particleAnimationId) {
-    particleAnimationId = requestAnimationFrame(renderParticles);
-  }
-}
-
-// ==============================================================================
-// 5. CLIENT-SIDE EXERCISE TRACKER ENGINE
+// 4. CLIENT-SIDE EXERCISE TRACKER ENGINE
 // ==============================================================================
 
 class ClientExerciseTracker {
@@ -1024,16 +1015,14 @@ let lastRepRendered = null;
 function updateTelemetryUI(repIncremented = false) {
   if (repIncremented) {
     playRepChime();
-    triggerRepParticleBurst();
 
+    // Retain lightweight, GPU-composited scale pulses on the rep counter badge only
     if (hudRepPillContainer) hudRepPillContainer.classList.add("rep-counter-glow", "rep-pulse");
     if (mainRepBox) mainRepBox.classList.add("rep-box-glow");
-    if (repsEl) repsEl.classList.add("rep-pulse");
 
     setTimeout(() => {
       if (hudRepPillContainer) hudRepPillContainer.classList.remove("rep-counter-glow", "rep-pulse");
       if (mainRepBox) mainRepBox.classList.remove("rep-box-glow");
-      if (repsEl) repsEl.classList.remove("rep-pulse");
     }, 450);
   }
 
