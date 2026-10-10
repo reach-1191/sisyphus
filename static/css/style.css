@@ -1083,6 +1083,24 @@ html, body {
   backface-visibility: hidden;
 }
 
+.pose-overlay-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  z-index: 5;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+.video-feed-wrapper.mirrored #workout-video,
+.video-feed-wrapper.mirrored #pose-overlay-canvas {
+  transform: scaleX(-1);
+}
+
 .particles-canvas {
   position: absolute;
   top: 0;

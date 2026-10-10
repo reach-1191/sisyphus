@@ -509,7 +509,30 @@ class ExerciseTrackerTestCase(unittest.TestCase):
         self.assertEqual(tracker.counter, 1)
         self.assertEqual(tracker.form_score, 100)
 
+    def test_client_side_workout_template_assets(self):
+        # Verify workout page serves MediaPipe CDN scripts, HTML5 video & canvas overlay
+        response = self.app.get('/workout')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'@mediapipe/pose', response.data)
+        self.assertIn(b'@mediapipe/camera_utils', response.data)
+        self.assertIn(b'id="workout-video"', response.data)
+        self.assertIn(b'id="pose-overlay-canvas"', response.data)
+        self.assertIn(b'OneEuroFilter', response.data)
+        self.assertNotIn(b'src="/video_feed"', response.data)
+
+    def test_demos_static_endpoint(self):
+        # Verify /demos static endpoint serves exercise demo videos
+        res = self.app.get('/demos/squat_demo.mp4')
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('video', res.content_type)
+
+    def test_video_feed_endpoint_removed(self):
+        # Verify /video_feed endpoint was removed to free server CPU
+        res = self.app.get('/video_feed')
+        self.assertEqual(res.status_code, 404)
+
 
 if __name__ == '__main__':
     unittest.main()
+
 

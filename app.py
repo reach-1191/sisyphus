@@ -29,6 +29,7 @@ from flask import (
     url_for,
     flash,
     session as flask_session,
+    send_from_directory,
 )
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (
@@ -1139,9 +1140,6 @@ class VideoStreamManager:
         self.is_paused = False
         self.frame_count = 0
 
-        self.thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self.thread.start()
-
     def _get_demo_path(self):
         if self.tracker.exercise == "pushup" and os.path.exists(PUSHUP_DEMO_PATH):
             return PUSHUP_DEMO_PATH
@@ -1242,91 +1240,11 @@ class VideoStreamManager:
             self.condition.notify_all()
 
     def _capture_loop(self):
-        target_fps = 30.0
-        frame_interval = 1.0 / target_fps
-
-        while self.running:
-            # If in browser camera mode, or paused, or no viewers connected, sleep and conserve CPU
-            if self.source_mode == "browser_cam" or self.is_paused or self.active_viewers == 0:
-                time.sleep(0.05)
-                continue
-
-            start_t = time.time()
-            self.synthetic_time += frame_interval
-            self.frame_count += 1
-
-            frame = None
-            custom_landmarks = None
-
-            with self.lock:
-                if self.cap is None and self.source_mode in ["webcam", "demo"]:
-                    self._open_source()
-
-                # 1. Try physical/demo capture if available
-                if self.cap and self.cap.isOpened():
-                    ret, frame = self.cap.read()
-                    if not ret:
-                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                        ret, frame = self.cap.read()
-
-                # 2. Seamless Synthetic Demo Fallback if no camera/video exists (e.g. for Dumbbell Curls)
-                if frame is None:
-                    frame, custom_landmarks = self.synthetic_engine.generate(
-                        self.tracker.exercise, self.synthetic_time
-                    )
-
-            # Performance Optimization: Resize incoming frame to 480x360 with fast SIMD INTER_LINEAR
-            h, w = frame.shape[:2]
-            if w != 480 or h != 360:
-                frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_LINEAR)
-
-            # Skip pose only on video file decode when custom landmarks are not provided
-            skip_pose = (self.frame_count % 2 != 0) if custom_landmarks is None else False
-            processed = self.tracker.process_frame(
-                frame,
-                custom_landmarks=custom_landmarks,
-                skip_pose=skip_pose
-            )
-
-            # Bandwidth Optimization: JPEG quality 75
-            ret, buf = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 75])
-            if ret:
-                with self.condition:
-                    self.latest_frame_bytes = buf.tobytes()
-                    self.condition.notify_all()
-
-            elapsed = time.time() - start_t
-            if elapsed < frame_interval:
-                time.sleep(frame_interval - elapsed)
-
-    def generate_frames(self):
-        """Yield multipart JPEG frames with event-driven Condition notifications."""
-        self.add_viewer()
-        last_yielded = None
-        try:
-            while self.running and not self.is_paused:
-                with self.condition:
-                    while self.running and not self.is_paused and (self.latest_frame_bytes is None or self.latest_frame_bytes == last_yielded):
-                        self.condition.wait(timeout=0.04)
-                    if not self.running or self.is_paused:
-                        break
-                    f_bytes = self.latest_frame_bytes
-
-                if f_bytes and f_bytes != last_yielded:
-                    last_yielded = f_bytes
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + f_bytes + b'\r\n')
-        finally:
-            self.remove_viewer()
+        pass
 
 
 tracker = ExerciseTracker()
 stream_mgr = VideoStreamManager(tracker)
-
-
-def generate_frames():
-    """Global video stream generator."""
-    return stream_mgr.generate_frames()
 
 
 # ---------------------------------------------------------
@@ -3175,7 +3093,7 @@ def save_workout():
 
     summary_url = url_for('summary', session_id=new_session.id)
 
-    if request.is_json:
+    if request.is_json or request.headers.get('Accept') == 'application/json' or 'application/json' in request.headers.get('Content-Type', '') or not request.form:
         return jsonify({
             "success": True,
             "message": "Workout saved successfully!",
@@ -3337,15 +3255,10 @@ def summary(session_id):
     )
 
 
-@app.route('/video_feed')
-def video_feed():
-    """Video feed endpoint streaming multipart JPEG."""
-    resp = Response(
-        generate_frames(),
-        mimetype='multipart/x-mixed-replace; boundary=frame'
-    )
-    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    return resp
+@app.route('/demos/<path:filename>')
+def serve_demo(filename):
+    """Serve demo video assets for client-side processing."""
+    return send_from_directory(BASE_DIR, filename)
 
 
 @app.route('/pause_feed', methods=['POST', 'GET'])

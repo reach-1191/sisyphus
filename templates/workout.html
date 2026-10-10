@@ -2,14 +2,22 @@
 
 {% block title %}Live Workout - Sisyphus AI Coach{% endblock %}
 
+{% block extra_head %}
+<!-- MediaPipe Pose and Camera Utility CDN scripts for Client-Side Tracking -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+{% endblock %}
+
 {% block content %}
 <!-- Modern Bento Box Workout Page Template -->
 <div class="workout-layout" id="workout-container">
   <!-- Video Feed & Bento Setup Card -->
   <div class="bento-card workout-video-card">
     <!-- Encapsulated Video Feed with Modern Floating Glassmorphism Camera HUD -->
-    <div class="video-feed-wrapper">
-      <img id="video-feed-img" src="/video_feed" alt="MediaPipe Tracking Feed" class="video-feed-img" />
+    <div class="video-feed-wrapper" id="video-feed-wrapper">
+      <!-- Client-side HTML5 Video and Transparent Overlay Canvas for 60 FPS Pose Estimation -->
+      <video id="workout-video" title="MediaPipe Tracking Feed" aria-label="MediaPipe Tracking Feed" class="video-feed-img" playsinline autoplay muted loop></video>
+      <canvas id="pose-overlay-canvas" class="pose-overlay-canvas" aria-label="MediaPipe Tracking Feed"></canvas>
 
       <!-- Top Floating Glassmorphism HUD Bar -->
       <div class="hud-bar hud-top-bar">
@@ -41,10 +49,6 @@
 
       <!-- Canvas Overlay for Floating Rep Particles -->
       <canvas id="rep-particles-canvas" class="particles-canvas"></canvas>
-
-      <!-- Client Browser Webcam & Capture Elements (Hidden) -->
-      <video id="client-webcam" playsinline autoplay muted style="display:none;"></video>
-      <canvas id="capture-canvas" style="display:none;"></canvas>
     </div>
 
     <!-- Mode Selector Bar (Warm Yellow Buttons & Pills) -->
@@ -69,7 +73,7 @@
           <div class="selector-heading">Video Source</div>
           <select id="source-select" class="btn-ghost source-select-box">
             <option value="demo" selected>📹 Demo Video Engine</option>
-            <option value="webcam">📷 Device Webcam (Cam 0)</option>
+            <option value="webcam">📷 Device Webcam (WebRTC)</option>
             <option value="browser_cam">🌐 Browser Webcam (WebRTC)</option>
           </select>
         </div>
@@ -96,7 +100,7 @@
           <span class="timer-icon">⏱️</span>
           <span id="session-timer" class="timer-text">00:00</span>
         </div>
-        <span id="active-side-badge" class="active-side-text">Active: Right Side</span>
+        <span id="active-side-badge" class="active-side-text">Active: Right Leg</span>
       </div>
     </div>
 
@@ -149,7 +153,7 @@
           <input type="hidden" name="rep_count" id="hidden-reps" value="0">
           <input type="hidden" name="total_duration_seconds" id="hidden-duration" value="0">
           <input type="hidden" name="avg_form_accuracy" id="hidden-accuracy" value="100">
-          <button type="submit" class="btn-yellow save-workout-submit-btn">
+          <button type="submit" class="btn-yellow save-workout-submit-btn" id="btn-save-workout">
             <span>✓ Finish & Save Workout</span>
           </button>
         </form>
@@ -166,698 +170,1360 @@
 
 {% block extra_scripts %}
 <script>
-  let lastRepCount = null;
-  let currentAccuracy = 100.0;
-  let currentDuration = 0.0;
-  let voiceEnabled = true;
-  let lastSpokenTime = 0;
-  let audioUnlocked = false;
-  let audioCtx = null;
-  let isCameraPaused = false;
-  let selectedVoice = null;
-  let lastAlertTimestamp = 0;
+/**
+ * Sisyphus Client-Side MediaPipe Exercise Tracker
+ * High-performance 60 FPS motion estimation with 1€ adaptive filtering,
+ * real-time joint trigonometry, Web Audio chimes, and natural Web Speech alerts.
+ */
 
-  // Browser Webcam State
-  let currentInputSource = "demo";
-  let isCapturing = false;
-  let webcamStream = null;
-  let currentBlobUrl = null;
-  let isSendingFrame = false;
-  const clientWebcam = document.getElementById("client-webcam");
-  const captureCanvas = document.getElementById("capture-canvas");
-  const captureCtx = captureCanvas ? captureCanvas.getContext("2d") : null;
+// ==============================================================================
+// 1. SIGNAL PROCESSING & SMOOTHING FILTERS (1€ & EMA)
+// ==============================================================================
 
-  // DOM Elements
-  const repsEl = document.getElementById("reps-count");
-  const mainRepBox = document.getElementById("main-rep-box");
-  const scoreValEl = document.getElementById("score-val");
-  const scoreBarEl = document.getElementById("score-bar");
-  const phaseBadgeEl = document.getElementById("phase-badge");
-  const sessionTimerEl = document.getElementById("session-timer");
-  const primaryAngleLabel = document.getElementById("primary-angle-label");
-  const primaryAngleVal = document.getElementById("primary-angle-val");
-  const secondaryAngleLabel = document.getElementById("secondary-angle-label");
-  const secondaryAngleVal = document.getElementById("secondary-angle-val");
-  const activeSideText = document.getElementById("active-side-badge");
-  const feedbackMsg = document.getElementById("feedback-msg");
-  const feedbackBanner = document.getElementById("feedback-banner");
-  const feedbackAvatar = document.getElementById("feedback-avatar");
-  const videoFeedImg = document.getElementById("video-feed-img");
-  const exerciseSelect = document.getElementById("exercise-select");
-  const sourceSelect = document.getElementById("source-select");
-  const btnVoiceToggle = document.getElementById("btn-voice-toggle");
-  const voiceLabel = document.getElementById("voice-label");
-  const btnResetSession = document.getElementById("btn-reset-session");
-  const hiddenExercise = document.getElementById("hidden-exercise");
-  const hiddenRepCount = document.getElementById("hidden-reps");
-  const hiddenDuration = document.getElementById("hidden-duration");
-  const hiddenAccuracy = document.getElementById("hidden-accuracy");
-  const btnPauseCamera = document.getElementById("btn-pause-camera");
-  const pauseIcon = document.getElementById("pause-icon");
-  const pauseText = document.getElementById("pause-text");
-  const modePills = document.querySelectorAll(".btn-mode-pill");
-  const btnStartSession = document.getElementById("btn-start-session");
-  const workoutSaveForm = document.getElementById("workout-save-form");
+class OneEuroFilter {
+  /**
+   * 1€ Filter (Casiez et al., CHI 2012)
+   * Adaptive low-pass filter specifically designed for human motion tracking.
+   * Suppresses jitter at low speeds while eliminating phase lag at high speeds.
+   */
+  constructor(minCutoff = 1.0, beta = 0.01, dCutoff = 1.0) {
+    this.minCutoff = Number(minCutoff);
+    this.beta = Number(beta);
+    this.dCutoff = Number(dCutoff);
+    this.xPrev = null;
+    this.dxPrev = 0.0;
+    this.tPrev = null;
+  }
 
-  // Floating HUD Elements
-  const hudExerciseMode = document.getElementById("hud-exercise-mode");
-  const hudStagePill = document.getElementById("hud-stage-pill");
-  const hudRepCount = document.getElementById("hud-rep-count");
-  const hudRepPillContainer = document.getElementById("hud-rep-pill-container");
-  const hudStatusIcon = document.getElementById("hud-status-icon");
-  const hudFormStatus = document.getElementById("hud-form-status");
-  const hudAnglePill = document.getElementById("hud-angle-pill");
-  const hudScorePill = document.getElementById("hud-score-pill");
+  reset(val = null) {
+    this.xPrev = val !== null ? Number(val) : null;
+    this.dxPrev = 0.0;
+    this.tPrev = null;
+  }
 
-  // Rep Particles Canvas
-  const particlesCanvas = document.getElementById("rep-particles-canvas");
-  const pCtx = particlesCanvas ? particlesCanvas.getContext("2d") : null;
-  let particles = [];
-  let particleAnimationId = null;
+  filter(x, t = null) {
+    if (x === null || x === undefined || isNaN(x)) return this.xPrev;
+    x = Number(x);
+    if (this.xPrev === null) {
+      this.xPrev = x;
+      this.tPrev = t;
+      return x;
+    }
 
-  function resizeParticlesCanvas() {
-    if (particlesCanvas && particlesCanvas.parentElement) {
-      const pw = particlesCanvas.parentElement.clientWidth;
-      const ph = particlesCanvas.parentElement.clientHeight;
-      if (particlesCanvas.width !== pw || particlesCanvas.height !== ph) {
-        particlesCanvas.width = pw;
-        particlesCanvas.height = ph;
+    let dt;
+    if (t === null || this.tPrev === null || t <= this.tPrev) {
+      dt = 1.0 / 60.0;
+    } else {
+      dt = Math.max(1.0 / 120.0, Math.min(1.0 / 10.0, (t - this.tPrev)));
+    }
+    this.tPrev = t;
+
+    // Filter the derivative (velocity)
+    const dx = (x - this.xPrev) / dt;
+    const aD = this._smoothingFactor(dt, this.dCutoff);
+    const dxHat = aD * dx + (1.0 - aD) * this.dxPrev;
+    this.dxPrev = dxHat;
+
+    // Adapt cutoff frequency based on velocity
+    const cutoff = this.minCutoff + this.beta * Math.abs(dxHat);
+    const a = this._smoothingFactor(dt, cutoff);
+    const xHat = a * x + (1.0 - a) * this.xPrev;
+    this.xPrev = xHat;
+    return xHat;
+  }
+
+  _smoothingFactor(dt, cutoff) {
+    const r = 2.0 * Math.PI * cutoff * dt;
+    return r / (r + 1.0);
+  }
+}
+
+function emaFilter(currentVal, prevVal, alpha = 0.35) {
+  if (prevVal === null || prevVal === undefined) return currentVal;
+  return Number(alpha * currentVal + (1.0 - alpha) * prevVal);
+}
+
+class LandmarkSmoother {
+  /**
+   * Maintains independent OneEuroFilters for 2D keypoint coordinates (x, y)
+   * with visibility-based confidence weighting to eradicate spatial landmark jitter.
+   */
+  constructor(minCutoff = 1.2, beta = 0.04, dCutoff = 1.0) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+    this.dCutoff = dCutoff;
+    this.filters = new Map();
+  }
+
+  reset() {
+    this.filters.clear();
+  }
+
+  smooth(landmarks, t) {
+    if (!landmarks) return null;
+    const smoothed = [];
+    for (let i = 0; i < landmarks.length; i++) {
+      const lm = landmarks[i];
+      const vis = lm.visibility !== undefined ? lm.visibility : 1.0;
+      if (!this.filters.has(i)) {
+        this.filters.set(i, {
+          x: new OneEuroFilter(this.minCutoff, this.beta, this.dCutoff),
+          y: new OneEuroFilter(this.minCutoff, this.beta, this.dCutoff)
+        });
       }
+      const pair = this.filters.get(i);
+      let sx, sy;
+      if (vis >= 0.35) {
+        sx = pair.x.filter(lm.x, t);
+        sy = pair.y.filter(lm.y, t);
+      } else {
+        sx = pair.x.filter(pair.x.xPrev !== null ? pair.x.xPrev : lm.x, t);
+        sy = pair.y.filter(pair.y.xPrev !== null ? pair.y.xPrev : lm.y, t);
+      }
+      smoothed.push({ x: sx, y: sy, z: lm.z, visibility: vis });
+    }
+    return smoothed;
+  }
+}
+
+// ==============================================================================
+// 2. TRIGONOMETRY & KINEMATICS
+// ==============================================================================
+
+function calculateAngle(a, b, c) {
+  /**
+   * Calculate 2D planar angle at joint b (in degrees) given points a, b, c.
+   * Returns angle in range [0, 180].
+   */
+  const rad = Math.atan2(c[1] - b[1], c[0] - b[0]) - Math.atan2(a[1] - b[1], a[0] - b[0]);
+  let ang = Math.abs((rad * 180.0) / Math.PI);
+  if (ang > 180.0) {
+    ang = 360.0 - ang;
+  }
+  return Number(ang);
+}
+
+function calculateElbowFlare(shoulder, hip, elbow) {
+  /**
+   * Calculate elbow flare angle relative to torso axis (Shoulder -> Hip).
+   * 0 deg: elbow along ribs/torso; 45 deg: ideal form; 90 deg: flared T-shape.
+   */
+  const vTorso = [hip[0] - shoulder[0], hip[1] - shoulder[1]];
+  const vArm = [elbow[0] - shoulder[0], elbow[1] - shoulder[1]];
+  const dot = vTorso[0] * vArm[0] + vTorso[1] * vArm[1];
+  const normTorso = Math.hypot(vTorso[0], vTorso[1]);
+  const normArm = Math.hypot(vArm[0], vArm[1]);
+  const norms = normTorso * normArm;
+  if (norms === 0) return 0.0;
+  const cosAng = Math.max(-1.0, Math.min(1.0, dot / norms));
+  return Number((Math.acos(cosAng) * 180.0) / Math.PI);
+}
+
+// ==============================================================================
+// 3. AUDIO & SPEECH SYNTHESIS ENGINE
+// ==============================================================================
+
+let audioCtx = null;
+let audioUnlocked = false;
+let voiceEnabled = true;
+let selectedVoice = null;
+let lastSpokenTime = 0;
+
+function getAudioContext() {
+  if (!audioCtx) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      audioCtx = new AudioContextClass();
     }
   }
-  window.addEventListener("resize", resizeParticlesCanvas, { passive: true });
-  resizeParticlesCanvas();
+  if (audioCtx && audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
+  return audioCtx;
+}
 
-  function renderParticles() {
-    if (!particlesCanvas || !pCtx) {
-      particleAnimationId = null;
+function playRepChime() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, now); // Crisp A5 tone
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.35, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.3);
+  } catch (e) {
+    console.warn("Web Audio chime error:", e);
+  }
+}
+
+function loadBestVoice() {
+  if (!window.speechSynthesis) return;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices || voices.length === 0) return;
+  const priorityKeywords = ['Google', 'Natural', 'Samantha', 'Karen', 'Daniel'];
+  for (const kw of priorityKeywords) {
+    const match = voices.find(v => v.lang && v.lang.startsWith("en") && v.name.includes(kw));
+    if (match) {
+      selectedVoice = match;
       return;
     }
+  }
+  selectedVoice = voices.find(v => v.lang && v.lang.startsWith("en")) || voices[0];
+}
+
+if (window.speechSynthesis) {
+  loadBestVoice();
+  if (window.speechSynthesis.onvoiceschanged !== undefined) {
+    window.speechSynthesis.onvoiceschanged = loadBestVoice;
+  }
+}
+
+function unlockAudio() {
+  getAudioContext();
+  if (!audioUnlocked && window.speechSynthesis) {
+    try {
+      const dummy = new SpeechSynthesisUtterance("");
+      dummy.volume = 0;
+      window.speechSynthesis.speak(dummy);
+      audioUnlocked = true;
+      const btn = document.getElementById("btn-start-session");
+      if (btn) {
+        btn.innerHTML = "<span>🔊</span> <span>Audio Active</span>";
+        btn.className = "btn-ghost";
+        btn.style.color = "#18181b";
+      }
+    } catch (err) {}
+  }
+}
+document.addEventListener("click", unlockAudio, { once: true });
+
+function speakFormError(errorMessage) {
+  if (!voiceEnabled || !window.speechSynthesis || !errorMessage) return;
+  const now = Date.now();
+  if (now - lastSpokenTime < 4000) return; // 4-second throttle
+
+  try {
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(errorMessage);
+    if (!selectedVoice) loadBestVoice();
+    if (selectedVoice) {
+      utter.voice = selectedVoice;
+      utter.lang = selectedVoice.lang || "en-US";
+    }
+    utter.pitch = 1.0;
+    utter.rate = 1.05;
+    utter.volume = 1.0;
+    window.speechSynthesis.speak(utter);
+    lastSpokenTime = now;
+  } catch (e) {
+    console.warn("Speech error:", e);
+  }
+}
+
+// ==============================================================================
+// 4. REP PARTICLES CANVAS BURST EFFECT
+// ==============================================================================
+
+const particlesCanvas = document.getElementById("rep-particles-canvas");
+const pCtx = particlesCanvas ? particlesCanvas.getContext("2d") : null;
+let particles = [];
+let particleAnimationId = null;
+
+function resizeParticlesCanvas() {
+  if (particlesCanvas && particlesCanvas.parentElement) {
+    const pw = particlesCanvas.parentElement.clientWidth;
+    const ph = particlesCanvas.parentElement.clientHeight;
+    if (particlesCanvas.width !== pw || particlesCanvas.height !== ph) {
+      particlesCanvas.width = pw;
+      particlesCanvas.height = ph;
+    }
+  }
+}
+window.addEventListener("resize", resizeParticlesCanvas, { passive: true });
+resizeParticlesCanvas();
+
+function renderParticles() {
+  if (!particlesCanvas || !pCtx) {
+    particleAnimationId = null;
+    return;
+  }
+  pCtx.clearRect(0, 0, particlesCanvas.width, particlesCanvas.height);
+  if (particles.length === 0) {
+    particleAnimationId = null;
+    return;
+  }
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.12;
+    p.alpha -= p.decay;
+    if (p.alpha <= 0) {
+      particles.splice(i, 1);
+      continue;
+    }
+    pCtx.save();
+    pCtx.globalAlpha = p.alpha;
+    pCtx.fillStyle = p.color;
+    pCtx.shadowBlur = 8;
+    pCtx.shadowColor = p.color;
+    pCtx.beginPath();
+    pCtx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+    pCtx.fill();
+    pCtx.restore();
+  }
+  if (particles.length > 0) {
+    particleAnimationId = requestAnimationFrame(renderParticles);
+  } else {
     pCtx.clearRect(0, 0, particlesCanvas.width, particlesCanvas.height);
-    if (particles.length === 0) {
-      particleAnimationId = null;
-      return;
+    particleAnimationId = null;
+  }
+}
+
+function triggerRepParticleBurst() {
+  if (!particlesCanvas || !pCtx) return;
+  resizeParticlesCanvas();
+  const cx = particlesCanvas.width - 70;
+  const cy = 35;
+  const count = 28;
+  const colors = ["#facc15", "#fde047", "#ffffff", "#eab308", "#f59e0b"];
+
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5;
+    const speed = Math.random() * 5 + 3;
+    particles.push({
+      x: cx,
+      y: cy,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      radius: Math.random() * 3.5 + 2,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      alpha: 1.0,
+      decay: Math.random() * 0.03 + 0.02
+    });
+  }
+  if (!particleAnimationId) {
+    particleAnimationId = requestAnimationFrame(renderParticles);
+  }
+}
+
+// ==============================================================================
+// 5. CLIENT-SIDE EXERCISE TRACKER ENGINE
+// ==============================================================================
+
+class ClientExerciseTracker {
+  constructor() {
+    this.exercise = "squat"; // "squat", "pushup", "curl"
+    this.counter = 0;
+    this.stage = "up";
+    this.activeSide = "right";
+    this.formScore = 100;
+    this.formScoresHistory = [];
+    this.repScoreDeductions = new Set();
+    this.sessionStartTime = Date.now();
+    this.totalPoseFrames = 0;
+    this.warningPoseFrames = 0;
+
+    // Joint Angle Filters
+    this.primaryFilter = new OneEuroFilter(1.2, 0.015, 1.0);
+    this.secondaryFilter = new OneEuroFilter(1.2, 0.015, 1.0);
+    this.flareFilter = new OneEuroFilter(1.0, 0.010, 1.0);
+    this.landmarkSmoother = new LandmarkSmoother(1.2, 0.04, 1.0);
+
+    this.smoothedPrimaryAngle = 180.0;
+    this.smoothedSecondaryAngle = 180.0;
+    this.smoothedFlareAngle = 0.0;
+
+    this.minAngleInRep = 180.0;
+    this.maxAngleInRep = 180.0;
+    this.feedback = "Ready - Position body in frame";
+    this.warningFlags = [];
+  }
+
+  setExercise(ex) {
+    if (["squat", "pushup", "curl"].includes(ex)) {
+      this.exercise = ex;
+      this.counter = 0;
+      this.stage = ex === "curl" ? "down" : "up";
+      this.activeSide = "right";
+      this.formScore = 100;
+      this.formScoresHistory = [];
+      this.repScoreDeductions.clear();
+      this.totalPoseFrames = 0;
+      this.warningPoseFrames = 0;
+      this.primaryFilter.reset(180.0);
+      this.secondaryFilter.reset(180.0);
+      this.flareFilter.reset(0.0);
+      this.landmarkSmoother.reset();
+      this.smoothedPrimaryAngle = 180.0;
+      this.smoothedSecondaryAngle = 180.0;
+      this.smoothedFlareAngle = 0.0;
+      this.minAngleInRep = 180.0;
+      this.maxAngleInRep = 180.0;
+      this.warningFlags = [];
+      this.feedback = `${ex.charAt(0).toUpperCase() + ex.slice(1)} mode activated`;
     }
-    for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i];
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vy += 0.12; // subtle gravity
-      p.alpha -= p.decay;
-      if (p.alpha <= 0) {
-        particles.splice(i, 1);
-        continue;
-      }
-      pCtx.save();
-      pCtx.globalAlpha = p.alpha;
-      pCtx.fillStyle = p.color;
-      pCtx.shadowBlur = 8;
-      pCtx.shadowColor = p.color;
-      pCtx.beginPath();
-      pCtx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-      pCtx.fill();
-      pCtx.restore();
+  }
+
+  resetReps() {
+    this.counter = 0;
+    this.stage = this.exercise === "curl" ? "down" : "up";
+    this.activeSide = "right";
+    this.formScore = 100;
+    this.formScoresHistory = [];
+    this.repScoreDeductions.clear();
+    this.totalPoseFrames = 0;
+    this.warningPoseFrames = 0;
+    this.sessionStartTime = Date.now();
+    this.primaryFilter.reset(180.0);
+    this.secondaryFilter.reset(180.0);
+    this.flareFilter.reset(0.0);
+    this.landmarkSmoother.reset();
+    this.smoothedPrimaryAngle = 180.0;
+    this.smoothedSecondaryAngle = 180.0;
+    this.smoothedFlareAngle = 0.0;
+    this.minAngleInRep = 180.0;
+    this.maxAngleInRep = 180.0;
+    this.warningFlags = [];
+    this.feedback = "Counter reset to 0.";
+  }
+
+  getDuration() {
+    return Math.max(0, (Date.now() - this.sessionStartTime) / 1000.0);
+  }
+
+  getAvgAccuracy() {
+    if (this.totalPoseFrames > 0) {
+      const validFrames = Math.max(0, this.totalPoseFrames - this.warningPoseFrames);
+      return Math.round((validFrames / this.totalPoseFrames) * 1000.0) / 10.0;
     }
-    if (particles.length > 0) {
-      particleAnimationId = requestAnimationFrame(renderParticles);
+    if (this.formScoresHistory.length > 0) {
+      const sum = this.formScoresHistory.reduce((a, b) => a + b, 0);
+      return Math.round((sum / this.formScoresHistory.length) * 10.0) / 10.0;
+    }
+    return Number(this.formScore);
+  }
+
+  processFrame(rawLandmarks, w, h, tNow) {
+    if (!rawLandmarks || rawLandmarks.length < 29) {
+      this.feedback = "No person detected. Position body in frame.";
+      this.warningFlags = ["no_person"];
+      return null;
+    }
+
+    const landmarks = this.landmarkSmoother.smooth(rawLandmarks, tNow);
+    this.totalPoseFrames++;
+    this.warningFlags = [];
+
+    let vocalMsg = null;
+    let repIncremented = false;
+
+    if (this.exercise === "squat") {
+      const res = this._processSquat(landmarks, w, h, tNow);
+      vocalMsg = res.vocalMsg;
+      repIncremented = res.repIncremented;
+    } else if (this.exercise === "pushup") {
+      const res = this._processPushup(landmarks, w, h, tNow);
+      vocalMsg = res.vocalMsg;
+      repIncremented = res.repIncremented;
     } else {
-      pCtx.clearRect(0, 0, particlesCanvas.width, particlesCanvas.height);
-      particleAnimationId = null;
+      const res = this._processCurl(landmarks, w, h, tNow);
+      vocalMsg = res.vocalMsg;
+      repIncremented = res.repIncremented;
     }
+
+    if (this.warningFlags.length > 0) {
+      this.warningPoseFrames++;
+    }
+
+    if (vocalMsg) {
+      speakFormError(vocalMsg);
+    }
+
+    return {
+      landmarks,
+      repIncremented
+    };
   }
 
-  // Particle burst animation on rep increment
-  function triggerRepParticleBurst() {
-    if (!particlesCanvas || !pCtx) return;
-    resizeParticlesCanvas();
-    const cx = particlesCanvas.width - 70;
-    const cy = 35;
-    const count = 28;
-    const colors = ["#facc15", "#fde047", "#ffffff", "#eab308", "#f59e0b"];
+  _processSquat(landmarks, w, h, tNow) {
+    const lHip = [landmarks[23].x * w, landmarks[23].y * h];
+    const lKnee = [landmarks[25].x * w, landmarks[25].y * h];
+    const lAnkle = [landmarks[27].x * w, landmarks[27].y * h];
 
-    for (let i = 0; i < count; i++) {
-      const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5;
-      const speed = Math.random() * 5 + 3;
-      particles.push({
-        x: cx,
-        y: cy,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        radius: Math.random() * 3.5 + 2,
-        color: colors[Math.floor(Math.random() * colors.length)],
-        alpha: 1.0,
-        decay: Math.random() * 0.03 + 0.02
-      });
+    const rHip = [landmarks[24].x * w, landmarks[24].y * h];
+    const rKnee = [landmarks[26].x * w, landmarks[26].y * h];
+    const rAnkle = [landmarks[28].x * w, landmarks[28].y * h];
+
+    const lAng = calculateAngle(lHip, lKnee, lAnkle);
+    const rAng = calculateAngle(rHip, rKnee, rAnkle);
+
+    const lVis = landmarks[25].visibility !== undefined ? landmarks[25].visibility : 1.0;
+    const rVis = landmarks[26].visibility !== undefined ? landmarks[26].visibility : 1.0;
+
+    // Hysteresis on active side
+    if (this.activeSide === "right") {
+      if (lVis > rVis + 0.15) this.activeSide = "left";
+    } else {
+      if (rVis > lVis + 0.15) this.activeSide = "right";
     }
-    if (!particleAnimationId) {
-      particleAnimationId = requestAnimationFrame(renderParticles);
-    }
-  }
 
-  function formatTime(totalSec) {
-    const s = Math.floor(totalSec || 0);
-    const mins = Math.floor(s / 60);
-    const secs = s % 60;
-    return (mins < 10 ? "0" : "") + mins + ":" + (secs < 10 ? "0" : "") + secs;
-  }
+    const rawKneeAngle = this.activeSide === "right" ? rAng : lAng;
+    this.smoothedPrimaryAngle = this.primaryFilter.filter(rawKneeAngle, tNow);
+    const kneeAngle = this.smoothedPrimaryAngle;
 
-  // Web Audio Rep Chime
-  function getAudioContext() {
-    if (!audioCtx) {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (AudioContextClass) {
-        audioCtx = new AudioContextClass();
+    // Knee Cave (Valgus) check
+    const kneeDist = Math.abs(landmarks[25].x - landmarks[26].x);
+    const ankleDist = Math.abs(landmarks[27].x - landmarks[28].x);
+    const hipDist = Math.abs(landmarks[23].x - landmarks[24].x);
+
+    let kneeCave = false;
+    if (kneeAngle < 140.0 && ankleDist > 0.08 && hipDist >= 0.08) {
+      if (kneeDist < 0.72 * ankleDist || kneeDist < 0.80 * hipDist) {
+        kneeCave = true;
+        this.warningFlags.push("Knees caving inward! Push knees out.");
+        this.repScoreDeductions.add("knee_cave");
       }
     }
-    if (audioCtx && audioCtx.state === "suspended") {
-      audioCtx.resume();
-    }
-    return audioCtx;
-  }
 
-  function playRepChime() {
-    try {
-      const ctx = getAudioContext();
-      if (!ctx) return;
-      const now = ctx.currentTime;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
+    let vocalMsg = null;
+    let repIncremented = false;
+    const DOWN_THRESH = 100.0;
+    const UP_THRESH = 160.0;
 
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(880, now);
+    if (this.stage === "up") {
+      if (kneeAngle < 140.0) {
+        this.stage = "down";
+        this.minAngleInRep = kneeAngle;
+        this.repScoreDeductions.clear();
+        this.feedback = "Descending... Lower hips to 100°";
+      } else {
+        this.feedback = "Standing: Begin squat";
+      }
+    } else if (this.stage === "down") {
+      this.minAngleInRep = Math.min(this.minAngleInRep, kneeAngle);
 
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.35, now + 0.012);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
+      if (kneeAngle <= DOWN_THRESH) {
+        this.feedback = "Good Depth! Now push up";
+        this.repScoreDeductions.delete("shallow_depth");
+      } else if (kneeAngle > this.minAngleInRep + 15.0 && this.minAngleInRep > DOWN_THRESH) {
+        this.feedback = "Squat deeper! Knee angle must reach < 100°";
+        this.warningFlags.push("Shallow squat depth (< 100° required)");
+        this.repScoreDeductions.add("shallow_depth");
+      }
 
-      osc.connect(gain);
-      gain.connect(ctx.destination);
+      if (kneeCave) {
+        this.feedback = "Knees caving! Keep knees wide";
+      }
 
-      osc.start(now);
-      osc.stop(now + 0.3);
-    } catch (e) {
-      console.warn("Web Audio chime error:", e);
-    }
-  }
+      // Rep Completion
+      if (kneeAngle >= UP_THRESH) {
+        this.stage = "up";
+        this.counter++;
+        repIncremented = true;
 
-  function loadBestVoice() {
-    if (!window.speechSynthesis) return;
-    const voices = window.speechSynthesis.getVoices();
-    if (!voices || voices.length === 0) return;
-    const priorityKeywords = ['Google', 'Natural', 'Samantha', 'Karen', 'Daniel'];
-    for (const kw of priorityKeywords) {
-      const match = voices.find(v => v.lang && v.lang.startsWith("en") && v.name.includes(kw));
-      if (match) {
-        selectedVoice = match;
-        return;
+        let deductions = 0;
+        if (this.repScoreDeductions.has("shallow_depth")) deductions += 30;
+        if (this.repScoreDeductions.has("knee_cave")) deductions += 25;
+
+        const repScore = Math.max(30, 100 - deductions);
+        this.formScoresHistory.push(repScore);
+        this.formScore = Math.round(0.7 * this.formScore + 0.3 * repScore);
+
+        if (deductions === 0) {
+          this.feedback = `Rep #${this.counter} Complete! Perfect Depth (100%)`;
+        } else {
+          const critique = this.repScoreDeductions.has("shallow_depth") ? "Squat deeper next time." : "Keep knees out.";
+          this.feedback = `Rep #${this.counter} Complete (${repScore}% Form) - ${critique}`;
+        }
       }
     }
-    selectedVoice = voices[0];
+
+    if (!repIncremented) {
+      if (kneeCave) {
+        vocalMsg = "Keep your knees out!";
+      } else if (this.stage === "down" && kneeAngle < 120.0 && this.minAngleInRep > 105.0) {
+        vocalMsg = "Squat deeper!";
+      }
+    }
+
+    return { vocalMsg, repIncremented };
   }
 
-  if (window.speechSynthesis) {
-    loadBestVoice();
-    if (window.speechSynthesis.onvoiceschanged !== undefined) {
-      window.speechSynthesis.onvoiceschanged = loadBestVoice;
+  _processPushup(landmarks, w, h, tNow) {
+    const lShoulder = [landmarks[11].x * w, landmarks[11].y * h];
+    const lElbow = [landmarks[13].x * w, landmarks[13].y * h];
+    const lWrist = [landmarks[15].x * w, landmarks[15].y * h];
+    const lHip = [landmarks[23].x * w, landmarks[23].y * h];
+    const lAnkle = [landmarks[27].x * w, landmarks[27].y * h];
+
+    const rShoulder = [landmarks[12].x * w, landmarks[12].y * h];
+    const rElbow = [landmarks[14].x * w, landmarks[14].y * h];
+    const rWrist = [landmarks[16].x * w, landmarks[16].y * h];
+    const rHip = [landmarks[24].x * w, landmarks[24].y * h];
+    const rAnkle = [landmarks[28].x * w, landmarks[28].y * h];
+
+    const lVis = landmarks[13].visibility !== undefined ? landmarks[13].visibility : 1.0;
+    const rVis = landmarks[14].visibility !== undefined ? landmarks[14].visibility : 1.0;
+
+    // Hysteresis
+    if (this.activeSide === "right") {
+      if (lVis > rVis + 0.15) this.activeSide = "left";
+    } else {
+      if (rVis > lVis + 0.15) this.activeSide = "right";
+    }
+
+    const shoulder = this.activeSide === "right" ? rShoulder : lShoulder;
+    const elbow = this.activeSide === "right" ? rElbow : lElbow;
+    const wrist = this.activeSide === "right" ? rWrist : lWrist;
+    const hip = this.activeSide === "right" ? rHip : lHip;
+    const ankle = this.activeSide === "right" ? rAnkle : lAnkle;
+
+    const rawElbowAngle = calculateAngle(shoulder, elbow, wrist);
+    const rawSpineAngle = calculateAngle(shoulder, hip, ankle);
+    const rawFlareAngle = calculateElbowFlare(shoulder, hip, elbow);
+
+    this.smoothedPrimaryAngle = this.primaryFilter.filter(rawElbowAngle, tNow);
+    this.smoothedSecondaryAngle = this.secondaryFilter.filter(rawSpineAngle, tNow);
+    this.smoothedFlareAngle = this.flareFilter.filter(rawFlareAngle, tNow);
+
+    const elbowAngle = this.smoothedPrimaryAngle;
+    const spineAngle = this.smoothedSecondaryAngle;
+    const flareAngle = this.smoothedFlareAngle;
+
+    let backSags = false;
+    if (spineAngle < 160.0) {
+      backSags = true;
+      this.warningFlags.push("Hips sagging! Raise hips to keep straight plank.");
+      this.repScoreDeductions.add("spine_sag");
+    }
+
+    let elbowFlared = false;
+    if (elbowAngle < 140.0 && flareAngle > 75.0) {
+      elbowFlared = true;
+      this.warningFlags.push("Elbows flaring! Tuck elbows to 45°.");
+      this.repScoreDeductions.add("elbow_flare");
+    }
+
+    let vocalMsg = null;
+    let repIncremented = false;
+    const DOWN_THRESH = 100.0;
+    const UP_THRESH = 160.0;
+
+    if (this.stage === "up") {
+      if (elbowAngle < 135.0) {
+        this.stage = "down";
+        this.minAngleInRep = elbowAngle;
+        this.repScoreDeductions.clear();
+        this.feedback = "Descending... Lower chest to 100°";
+      } else {
+        this.feedback = "Plank: Begin push-up";
+      }
+    } else if (this.stage === "down") {
+      this.minAngleInRep = Math.min(this.minAngleInRep, elbowAngle);
+
+      if (elbowAngle <= DOWN_THRESH) {
+        this.feedback = "Great Depth! Now press up";
+        this.repScoreDeductions.delete("shallow_chest");
+      } else if (elbowAngle > this.minAngleInRep + 15.0 && this.minAngleInRep > DOWN_THRESH) {
+        this.feedback = "Chest lower! Elbow angle must reach < 100°";
+        this.warningFlags.push("Insufficient chest depth (< 100° required)");
+        this.repScoreDeductions.add("shallow_chest");
+      }
+
+      if (backSags) {
+        this.feedback = "Hips sagging! Raise hips to keep straight plank";
+      }
+
+      if (elbowAngle >= UP_THRESH) {
+        this.stage = "up";
+        this.counter++;
+        repIncremented = true;
+
+        let deductions = 0;
+        if (this.repScoreDeductions.has("shallow_chest")) deductions += 30;
+        if (this.repScoreDeductions.has("spine_sag")) deductions += 25;
+        if (this.repScoreDeductions.has("elbow_flare")) deductions += 20;
+
+        const repScore = Math.max(25, 100 - deductions);
+        this.formScoresHistory.push(repScore);
+        this.formScore = Math.round(0.7 * this.formScore + 0.3 * repScore);
+
+        if (deductions === 0) {
+          this.feedback = `Rep #${this.counter} Complete! Solid Form (100%)`;
+        } else {
+          const critique = this.repScoreDeductions.has("spine_sag") ? "Raise hips next time." : "Lower chest next time.";
+          this.feedback = `Rep #${this.counter} Complete (${repScore}% Form) - ${critique}`;
+        }
+      }
+    }
+
+    if (!repIncremented) {
+      if (backSags) {
+        vocalMsg = "Raise your hips!";
+      } else if (this.stage === "down" && elbowAngle < 120.0 && this.minAngleInRep > 105.0) {
+        vocalMsg = "Lower your chest!";
+      }
+    }
+
+    return { vocalMsg, repIncremented };
+  }
+
+  _processCurl(landmarks, w, h, tNow) {
+    const lShoulder = [landmarks[11].x * w, landmarks[11].y * h];
+    const lElbow = [landmarks[13].x * w, landmarks[13].y * h];
+    const lWrist = [landmarks[15].x * w, landmarks[15].y * h];
+    const lHip = [landmarks[23].x * w, landmarks[23].y * h];
+
+    const rShoulder = [landmarks[12].x * w, landmarks[12].y * h];
+    const rElbow = [landmarks[14].x * w, landmarks[14].y * h];
+    const rWrist = [landmarks[16].x * w, landmarks[16].y * h];
+    const rHip = [landmarks[24].x * w, landmarks[24].y * h];
+
+    const lVis = landmarks[13].visibility !== undefined ? landmarks[13].visibility : 1.0;
+    const rVis = landmarks[14].visibility !== undefined ? landmarks[14].visibility : 1.0;
+
+    // Hysteresis
+    if (this.activeSide === "right") {
+      if (lVis > rVis + 0.15) this.activeSide = "left";
+    } else {
+      if (rVis > lVis + 0.15) this.activeSide = "right";
+    }
+
+    const shoulder = this.activeSide === "right" ? rShoulder : lShoulder;
+    const elbow = this.activeSide === "right" ? rElbow : lElbow;
+    const wrist = this.activeSide === "right" ? rWrist : lWrist;
+    const hip = this.activeSide === "right" ? rHip : lHip;
+
+    const rawArmAngle = calculateAngle(shoulder, elbow, wrist);
+    const rawFlareAngle = calculateElbowFlare(shoulder, hip, elbow);
+
+    this.smoothedPrimaryAngle = this.primaryFilter.filter(rawArmAngle, tNow);
+    this.smoothedFlareAngle = this.flareFilter.filter(rawFlareAngle, tNow);
+    this.smoothedSecondaryAngle = 45.0;
+
+    const armAngle = this.smoothedPrimaryAngle;
+    const flareAngle = this.smoothedFlareAngle;
+
+    let elbowFlared = false;
+    if (flareAngle > 35.0) {
+      elbowFlared = true;
+      this.warningFlags.push("Elbow flaring outward! Keep elbows tucked.");
+      this.repScoreDeductions.add("elbow_flare");
+    }
+
+    let vocalMsg = null;
+    let repIncremented = false;
+    const EXT_THRESH = 150.0;
+    const CURL_THRESH = 45.0;
+
+    if (this.stage === "down") {
+      this.maxAngleInRep = Math.max(this.maxAngleInRep, armAngle);
+
+      if (armAngle <= CURL_THRESH) {
+        this.stage = "up";
+        this.minAngleInRep = armAngle;
+        this.feedback = "Peak Curl Reached! Now lower slowly";
+      } else if (armAngle < 90.0) {
+        this.feedback = "Curling up... Target < 45°";
+      } else {
+        this.feedback = "Arm extended (>150°). Begin curl";
+      }
+    } else if (this.stage === "up") {
+      if (armAngle >= EXT_THRESH) {
+        this.stage = "down";
+        this.counter++;
+        repIncremented = true;
+        this.maxAngleInRep = armAngle;
+
+        let deductions = 0;
+        if (this.repScoreDeductions.has("elbow_flare")) deductions += 30;
+
+        const repScore = Math.max(40, 100 - deductions);
+        this.formScoresHistory.push(repScore);
+        this.formScore = Math.round(0.7 * this.formScore + 0.3 * repScore);
+        this.repScoreDeductions.clear();
+
+        if (deductions === 0) {
+          this.feedback = `Rep #${this.counter} Complete! Full Extension & Curl (100%)`;
+        } else {
+          this.feedback = `Rep #${this.counter} Complete (${repScore}% Form) - Keep elbows tucked next time`;
+        }
+      } else if (armAngle > 80.0) {
+        this.feedback = "Extending arm... Lower past 150°";
+      } else {
+        this.feedback = "Lower arm with control";
+      }
+    }
+
+    if (!repIncremented) {
+      if (elbowFlared) {
+        vocalMsg = "Keep your elbows tucked!";
+      }
+    }
+
+    return { vocalMsg, repIncremented };
+  }
+}
+
+// ==============================================================================
+// 6. UI SYNCHRONIZATION & TELEMETRY
+// ==============================================================================
+
+const tracker = new ClientExerciseTracker();
+
+const repsEl = document.getElementById("reps-count");
+const mainRepBox = document.getElementById("main-rep-box");
+const scoreValEl = document.getElementById("score-val");
+const scoreBarEl = document.getElementById("score-bar");
+const phaseBadgeEl = document.getElementById("phase-badge");
+const sessionTimerEl = document.getElementById("session-timer");
+const primaryAngleLabel = document.getElementById("primary-angle-label");
+const primaryAngleVal = document.getElementById("primary-angle-val");
+const secondaryAngleLabel = document.getElementById("secondary-angle-label");
+const secondaryAngleVal = document.getElementById("secondary-angle-val");
+const activeSideText = document.getElementById("active-side-badge");
+const feedbackMsg = document.getElementById("feedback-msg");
+const feedbackBanner = document.getElementById("feedback-banner");
+const feedbackAvatar = document.getElementById("feedback-avatar");
+
+const hudExerciseMode = document.getElementById("hud-exercise-mode");
+const hudStagePill = document.getElementById("hud-stage-pill");
+const hudRepCount = document.getElementById("hud-rep-count");
+const hudRepPillContainer = document.getElementById("hud-rep-pill-container");
+const hudStatusIcon = document.getElementById("hud-status-icon");
+const hudFormStatus = document.getElementById("hud-form-status");
+const hudAnglePill = document.getElementById("hud-angle-pill");
+const hudScorePill = document.getElementById("hud-score-pill");
+
+const hiddenExercise = document.getElementById("hidden-exercise");
+const hiddenRepCount = document.getElementById("hidden-reps");
+const hiddenDuration = document.getElementById("hidden-duration");
+const hiddenAccuracy = document.getElementById("hidden-accuracy");
+
+function formatTime(totalSec) {
+  const s = Math.floor(totalSec || 0);
+  const mins = Math.floor(s / 60);
+  const secs = s % 60;
+  return (mins < 10 ? "0" : "") + mins + ":" + (secs < 10 ? "0" : "") + secs;
+}
+
+let lastRepRendered = null;
+
+function updateTelemetryUI(repIncremented = false) {
+  if (repIncremented) {
+    playRepChime();
+    triggerRepParticleBurst();
+
+    if (hudRepPillContainer) hudRepPillContainer.classList.add("rep-counter-glow", "rep-pulse");
+    if (mainRepBox) mainRepBox.classList.add("rep-box-glow");
+    if (repsEl) repsEl.classList.add("rep-pulse");
+
+    setTimeout(() => {
+      if (hudRepPillContainer) hudRepPillContainer.classList.remove("rep-counter-glow", "rep-pulse");
+      if (mainRepBox) mainRepBox.classList.remove("rep-box-glow");
+      if (repsEl) repsEl.classList.remove("rep-pulse");
+    }, 450);
+  }
+
+  const repsStr = String(tracker.counter);
+  if (repsEl && repsEl.textContent !== repsStr) repsEl.textContent = repsStr;
+  if (hudRepCount && hudRepCount.textContent !== repsStr) hudRepCount.textContent = repsStr;
+
+  const durationSec = tracker.getDuration();
+  if (sessionTimerEl) sessionTimerEl.textContent = formatTime(durationSec);
+
+  const isDown = tracker.stage === "down";
+  const phaseText = isDown ? "DOWN" : "UP";
+  if (phaseBadgeEl) {
+    phaseBadgeEl.textContent = phaseText;
+    phaseBadgeEl.className = isDown ? "pill-tag pill-yellow" : "pill-tag pill-gray";
+  }
+  if (hudStagePill) {
+    hudStagePill.textContent = phaseText;
+    hudStagePill.style.color = isDown ? "#facc15" : "#9ca3af";
+    hudStagePill.style.background = isDown ? "rgba(250, 204, 21, 0.22)" : "rgba(255, 255, 255, 0.08)";
+  }
+
+  let exerciseDisplayName = "Squats";
+  const pAngleRound = Math.round(tracker.smoothedPrimaryAngle) + "°";
+
+  if (tracker.exercise === "squat") {
+    exerciseDisplayName = "Squats";
+    if (primaryAngleLabel) primaryAngleLabel.textContent = "Knee Angle";
+    if (primaryAngleVal) primaryAngleVal.textContent = pAngleRound;
+    if (secondaryAngleLabel) secondaryAngleLabel.textContent = "Target Depth";
+    if (secondaryAngleVal) secondaryAngleVal.textContent = "≤ 100°";
+    if (activeSideText) activeSideText.textContent = `Active: ${tracker.activeSide === 'right' ? 'Right Leg' : 'Left Leg'}`;
+  } else if (tracker.exercise === "pushup") {
+    exerciseDisplayName = "Push-ups";
+    if (primaryAngleLabel) primaryAngleLabel.textContent = "Elbow Angle";
+    if (primaryAngleVal) primaryAngleVal.textContent = pAngleRound;
+    if (secondaryAngleLabel) secondaryAngleLabel.textContent = "Spine Angle";
+    if (secondaryAngleVal) secondaryAngleVal.textContent = Math.round(tracker.smoothedSecondaryAngle) + "°";
+    if (activeSideText) activeSideText.textContent = `Flare: ${Math.round(tracker.smoothedFlareAngle)}° (≤ 75°)`;
+  } else {
+    exerciseDisplayName = "Dumbbell Curls";
+    if (primaryAngleLabel) primaryAngleLabel.textContent = "Arm Angle";
+    if (primaryAngleVal) primaryAngleVal.textContent = pAngleRound;
+    if (secondaryAngleLabel) secondaryAngleLabel.textContent = "Curl Range";
+    if (secondaryAngleVal) secondaryAngleVal.textContent = "< 40° / > 150°";
+    if (activeSideText) activeSideText.textContent = `Active: ${tracker.activeSide === 'right' ? 'Right Arm' : 'Left Arm'}`;
+  }
+
+  if (hudAnglePill) hudAnglePill.textContent = pAngleRound;
+  if (hudExerciseMode) hudExerciseMode.textContent = exerciseDisplayName;
+
+  const score = Math.max(0, Math.min(100, tracker.formScore));
+  const scoreStr = score + "%";
+  if (scoreValEl) scoreValEl.textContent = scoreStr;
+  if (scoreBarEl) scoreBarEl.style.width = scoreStr;
+  if (hudScorePill) hudScorePill.textContent = scoreStr;
+
+  if (feedbackMsg) feedbackMsg.textContent = tracker.feedback;
+  if (hudFormStatus) hudFormStatus.textContent = tracker.feedback;
+
+  const hasWarnings = tracker.warningFlags && tracker.warningFlags.length > 0;
+  if (hasWarnings) {
+    if (feedbackBanner) {
+      feedbackBanner.style.background = "rgba(239, 68, 68, 0.1)";
+      feedbackBanner.style.borderColor = "rgba(239, 68, 68, 0.3)";
+    }
+    if (feedbackAvatar) {
+      feedbackAvatar.style.background = "var(--accent-red)";
+      feedbackAvatar.style.color = "#ffffff";
+    }
+    if (hudStatusIcon) hudStatusIcon.textContent = "⚠️";
+    if (hudFormStatus) hudFormStatus.style.color = "#f87171";
+    if (hudScorePill) {
+      hudScorePill.style.color = "#f87171";
+      hudScorePill.style.background = "rgba(239, 68, 68, 0.18)";
+    }
+  } else {
+    if (feedbackBanner) {
+      feedbackBanner.style.background = "rgba(250, 204, 21, 0.12)";
+      feedbackBanner.style.borderColor = "rgba(250, 204, 21, 0.4)";
+    }
+    if (feedbackAvatar) {
+      feedbackAvatar.style.background = "#facc15";
+      feedbackAvatar.style.color = "#18181b";
+    }
+    if (hudStatusIcon) hudStatusIcon.textContent = "⚡";
+    if (hudFormStatus) hudFormStatus.style.color = "#ffffff";
+    if (hudScorePill) {
+      hudScorePill.style.color = "#facc15";
+      hudScorePill.style.background = "rgba(250, 204, 21, 0.18)";
     }
   }
 
-  function unlockAudio() {
-    getAudioContext();
-    if (!audioUnlocked && window.speechSynthesis) {
+  // Update hidden form inputs
+  if (hiddenRepCount) hiddenRepCount.value = tracker.counter;
+  if (hiddenDuration) hiddenDuration.value = Math.round(durationSec * 10) / 10;
+  if (hiddenAccuracy) hiddenAccuracy.value = Math.round(tracker.getAvgAccuracy());
+  if (hiddenExercise) {
+    hiddenExercise.value = tracker.exercise === "squat" ? "Squats" : (tracker.exercise === "pushup" ? "Push-Ups" : "Dumbbell Curls");
+  }
+}
+
+// Timer tick update every second
+setInterval(() => {
+  if (sessionTimerEl) {
+    sessionTimerEl.textContent = formatTime(tracker.getDuration());
+  }
+}, 1000);
+
+// ==============================================================================
+// 7. SKELETON OVERLAY RENDERER ON HTML5 CANVAS
+// ==============================================================================
+
+const poseOverlayCanvas = document.getElementById("pose-overlay-canvas");
+const poseCtx = poseOverlayCanvas ? poseOverlayCanvas.getContext("2d") : null;
+
+function renderSkeleton(landmarks, w, h) {
+  if (!poseOverlayCanvas || !poseCtx) return;
+  if (poseOverlayCanvas.width !== w || poseOverlayCanvas.height !== h) {
+    poseOverlayCanvas.width = w;
+    poseOverlayCanvas.height = h;
+  }
+
+  poseCtx.clearRect(0, 0, w, h);
+  if (!landmarks || landmarks.length === 0) return;
+
+  const connections = [
+    [11, 12], [11, 23], [12, 24], [23, 24],
+    [11, 13], [13, 15], [12, 14], [14, 16],
+    [23, 25], [25, 27], [24, 26], [26, 28]
+  ];
+
+  const hasWarnings = tracker.warningFlags && tracker.warningFlags.length > 0;
+  const strokeColor = hasWarnings ? "rgb(239, 68, 68)" : "rgb(250, 204, 21)";
+  const glowColor = hasWarnings ? "rgba(239, 68, 68, 0.6)" : "rgba(250, 204, 21, 0.6)";
+
+  // Draw connections (limbs)
+  poseCtx.save();
+  poseCtx.lineWidth = 3.5;
+  poseCtx.lineCap = "round";
+  poseCtx.strokeStyle = strokeColor;
+  poseCtx.shadowColor = glowColor;
+  poseCtx.shadowBlur = 6;
+
+  for (const [i1, i2] of connections) {
+    const p1 = landmarks[i1];
+    const p2 = landmarks[i2];
+    if (p1 && p2 && (p1.visibility || 1) > 0.3 && (p2.visibility || 1) > 0.3) {
+      poseCtx.beginPath();
+      poseCtx.moveTo(p1.x * w, p1.y * h);
+      poseCtx.lineTo(p2.x * w, p2.y * h);
+      poseCtx.stroke();
+    }
+  }
+  poseCtx.restore();
+
+  // Draw joint keypoints
+  const keyJoints = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+  for (const idx of keyJoints) {
+    const pt = landmarks[idx];
+    if (pt && (pt.visibility || 1) > 0.3) {
+      const px = pt.x * w;
+      const py = pt.y * h;
+
+      // Inner point
+      poseCtx.beginPath();
+      poseCtx.arc(px, py, 4.5, 0, Math.PI * 2);
+      poseCtx.fillStyle = "#ffffff";
+      poseCtx.fill();
+
+      // Outer ring
+      poseCtx.beginPath();
+      poseCtx.arc(px, py, 6.5, 0, Math.PI * 2);
+      poseCtx.lineWidth = 2;
+      poseCtx.strokeStyle = strokeColor;
+      poseCtx.stroke();
+    }
+  }
+
+  // Highlight key active tracked joint
+  let activeJointIdx = null;
+  if (tracker.exercise === "squat") {
+    activeJointIdx = tracker.activeSide === "right" ? 26 : 25;
+  } else if (["pushup", "curl"].includes(tracker.exercise)) {
+    activeJointIdx = tracker.activeSide === "right" ? 14 : 13;
+  }
+
+  if (activeJointIdx !== null && landmarks[activeJointIdx]) {
+    const apt = landmarks[activeJointIdx];
+    const ax = apt.x * w;
+    const ay = apt.y * h;
+
+    poseCtx.save();
+    poseCtx.beginPath();
+    poseCtx.arc(ax, ay, 12, 0, Math.PI * 2);
+    poseCtx.lineWidth = 3;
+    poseCtx.strokeStyle = "#ffffff";
+    poseCtx.shadowColor = strokeColor;
+    poseCtx.shadowBlur = 12;
+    poseCtx.stroke();
+    poseCtx.restore();
+  }
+}
+
+// ==============================================================================
+// 8. MEDIAPIPE POSE CLIENT-SIDE INTEGRATION & RAF PIPELINE
+// ==============================================================================
+
+const workoutVideo = document.getElementById("workout-video");
+const videoFeedWrapper = document.getElementById("video-feed-wrapper");
+const sourceSelect = document.getElementById("source-select");
+const btnPauseCamera = document.getElementById("btn-pause-camera");
+const pauseIcon = document.getElementById("pause-icon");
+const pauseText = document.getElementById("pause-text");
+const modePills = document.querySelectorAll(".btn-mode-pill");
+const exerciseSelect = document.getElementById("exercise-select");
+const btnVoiceToggle = document.getElementById("btn-voice-toggle");
+const voiceLabel = document.getElementById("voice-label");
+const btnResetSession = document.getElementById("btn-reset-session");
+const btnStartSession = document.getElementById("btn-start-session");
+const workoutSaveForm = document.getElementById("workout-save-form");
+
+const DEMO_VIDEOS = {
+  squat: "/demos/squat_demo.mp4",
+  pushup: "/demos/pushup_demo.mp4",
+  curl: "/demos/dumbbell_demo.mp4"
+};
+
+let currentInputSource = "demo";
+let webcamStream = null;
+let isCameraPaused = false;
+let isProcessingFrame = false;
+let poseInstance = null;
+let animFrameId = null;
+
+// Initialize MediaPipe Pose
+function initMediaPipePose() {
+  if (typeof Pose === "undefined") {
+    console.error("MediaPipe Pose library not yet loaded via CDN.");
+    return;
+  }
+
+  poseInstance = new Pose({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+  });
+
+  poseInstance.setOptions({
+    modelComplexity: 1,
+    smoothLandmarks: true,
+    enableSegmentation: false,
+    smoothSegmentation: false,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+
+  poseInstance.onResults((results) => {
+    isProcessingFrame = false;
+    const vw = workoutVideo.videoWidth || 640;
+    const vh = workoutVideo.videoHeight || 480;
+    const tNow = performance.now() / 1000.0;
+
+    const res = tracker.processFrame(results.poseLandmarks, vw, vh, tNow);
+    if (res) {
+      renderSkeleton(res.landmarks, vw, vh);
+      updateTelemetryUI(res.repIncremented);
+    } else {
+      renderSkeleton(null, vw, vh);
+      updateTelemetryUI(false);
+    }
+  });
+}
+
+// 60 FPS requestAnimationFrame rendering loop
+async function trackingLoop() {
+  if (!isCameraPaused && workoutVideo && workoutVideo.readyState >= 2 && !workoutVideo.paused) {
+    if (!isProcessingFrame && poseInstance) {
+      isProcessingFrame = true;
       try {
-        const dummy = new SpeechSynthesisUtterance("");
-        dummy.volume = 0;
-        window.speechSynthesis.speak(dummy);
-        audioUnlocked = true;
-        if (btnStartSession) {
-          btnStartSession.innerHTML = "<span>🔊</span> <span>Audio Active</span>";
-          btnStartSession.className = "btn-ghost";
-          btnStartSession.style.color = "#18181b";
-        }
-      } catch (err) {}
+        await poseInstance.send({ image: workoutVideo });
+      } catch (err) {
+        isProcessingFrame = false;
+      }
     }
   }
+  animFrameId = requestAnimationFrame(trackingLoop);
+}
 
-  if (btnStartSession) {
-    btnStartSession.addEventListener("click", () => {
-      unlockAudio();
-      speakFormError("Session started. Audio coaching enabled.");
+// Setup Demo Video Source
+function setDemoSource(exerciseName) {
+  stopWebcamStream();
+  if (videoFeedWrapper) videoFeedWrapper.classList.remove("mirrored");
+
+  const videoUrl = DEMO_VIDEOS[exerciseName] || DEMO_VIDEOS.squat;
+  workoutVideo.srcObject = null;
+  workoutVideo.src = videoUrl;
+  workoutVideo.loop = true;
+  workoutVideo.muted = true;
+  workoutVideo.playsInline = true;
+
+  workoutVideo.play().catch(err => {
+    console.warn("Autoplay interaction note:", err);
+  });
+}
+
+// Setup Webcam Source
+async function setWebcamSource() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("Browser camera access requires HTTPS or localhost.");
+    sourceSelect.value = "demo";
+    currentInputSource = "demo";
+    setDemoSource(tracker.exercise);
+    return;
+  }
+
+  try {
+    if (hudFormStatus) hudFormStatus.textContent = "Requesting browser camera...";
+    if (feedbackMsg) feedbackMsg.textContent = "Requesting browser camera permission...";
+
+    stopWebcamStream();
+    webcamStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+      audio: false
     });
-  }
-  document.addEventListener("click", unlockAudio);
 
-  function speakFormError(errorMessage) {
-    if (!voiceEnabled || !window.speechSynthesis || !errorMessage) return;
-    const now = Date.now();
-    if (now - lastSpokenTime < 4000) return;
+    workoutVideo.src = "";
+    workoutVideo.srcObject = webcamStream;
+    workoutVideo.playsInline = true;
+    workoutVideo.muted = true;
+    await workoutVideo.play();
+
+    // Mirror webcam feed and skeleton overlay for natural selfie orientation
+    if (videoFeedWrapper) videoFeedWrapper.classList.add("mirrored");
+  } catch (err) {
+    console.error("Webcam access error:", err);
+    alert("Camera permission denied or camera device in use. Falling back to Demo Video.");
+    sourceSelect.value = "demo";
+    currentInputSource = "demo";
+    setDemoSource(tracker.exercise);
+  }
+}
+
+function stopWebcamStream() {
+  if (webcamStream) {
+    webcamStream.getTracks().forEach(t => t.stop());
+    webcamStream = null;
+  }
+  if (workoutVideo && workoutVideo.srcObject) {
+    workoutVideo.srcObject = null;
+  }
+}
+
+// Exercise Mode Switcher
+function switchExercise(ex) {
+  tracker.setExercise(ex);
+  modePills.forEach(p => {
+    if (p.getAttribute("data-exercise") === ex) {
+      p.classList.add("active");
+    } else {
+      p.classList.remove("active");
+    }
+  });
+  if (exerciseSelect) exerciseSelect.value = ex;
+  if (currentInputSource === "demo") {
+    setDemoSource(ex);
+  }
+  updateTelemetryUI(false);
+}
+
+modePills.forEach(pill => {
+  pill.addEventListener("click", () => {
+    const ex = pill.getAttribute("data-exercise");
+    switchExercise(ex);
+  });
+});
+
+// Source Switcher
+sourceSelect.addEventListener("change", (e) => {
+  const sel = e.target.value;
+  currentInputSource = sel;
+  if (sel === "webcam" || sel === "browser_cam") {
+    setWebcamSource();
+  } else {
+    setDemoSource(tracker.exercise);
+  }
+});
+
+// Pause / Resume Feed Button
+btnPauseCamera.addEventListener("click", () => {
+  isCameraPaused = !isCameraPaused;
+  if (isCameraPaused) {
+    pauseIcon.textContent = "▶️";
+    pauseText.textContent = "Resume Feed";
+    workoutVideo.pause();
+    if (poseCtx && poseOverlayCanvas) {
+      poseCtx.clearRect(0, 0, poseOverlayCanvas.width, poseOverlayCanvas.height);
+    }
+  } else {
+    pauseIcon.textContent = "⏸️";
+    pauseText.textContent = "Pause Feed";
+    workoutVideo.play().catch(() => {});
+  }
+});
+
+// Voice Toggle
+btnVoiceToggle.addEventListener("click", () => {
+  voiceEnabled = !voiceEnabled;
+  if (voiceEnabled) {
+    btnVoiceToggle.className = "btn-ghost voice-toggle-btn";
+    voiceLabel.textContent = "Errors Only";
+  } else {
+    btnVoiceToggle.className = "btn-ghost voice-toggle-btn";
+    btnVoiceToggle.style.color = "var(--accent-red)";
+    voiceLabel.textContent = "Muted";
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+  }
+});
+
+// Reset Reps Button
+btnResetSession.addEventListener("click", () => {
+  tracker.resetReps();
+  updateTelemetryUI(false);
+});
+
+// Unlock Browser Audio
+if (btnStartSession) {
+  btnStartSession.addEventListener("click", () => {
+    unlockAudio();
+    speakFormError("Session started. Audio coaching enabled.");
+  });
+}
+
+// Save Workout Session via JSON API Endpoint
+if (workoutSaveForm) {
+  workoutSaveForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const duration = Math.max(1.0, tracker.getDuration());
+    const validF = Math.max(0, tracker.totalPoseFrames - tracker.warningPoseFrames);
+    const avgAcc = tracker.getAvgAccuracy();
+
+    const payload = {
+      exercise_type: tracker.exercise === "squat" ? "Squats" : (tracker.exercise === "pushup" ? "Push-Ups" : "Dumbbell Curls"),
+      rep_count: tracker.counter,
+      total_duration_seconds: Math.round(duration * 10) / 10,
+      avg_form_accuracy: avgAcc,
+      valid_frames: validF,
+      error_warnings: tracker.warningPoseFrames
+    };
 
     try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(errorMessage);
-      if (!selectedVoice) loadBestVoice();
-      if (selectedVoice) {
-        utter.voice = selectedVoice;
-        utter.lang = selectedVoice.lang || "en-US";
-      }
-      utter.pitch = 1.0;
-      utter.rate = 1.05;
-      utter.volume = 1.0;
-      window.speechSynthesis.speak(utter);
-      lastSpokenTime = now;
-    } catch (e) {}
-  }
+      const res = await fetch("/save_workout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
 
-  async function pollAudioAlert() {
-    try {
-      const res = await fetch("/api/audio_alert");
       if (res.ok) {
         const data = await res.json();
-        if (data && data.alert && data.timestamp && data.timestamp > lastAlertTimestamp) {
-          lastAlertTimestamp = data.timestamp;
-          speakFormError(data.alert);
-        }
-      }
-    } catch (e) {}
-  }
-  setInterval(pollAudioAlert, 1000);
-
-  if (workoutSaveForm) {
-    workoutSaveForm.addEventListener("submit", () => {
-      if (hiddenRepCount) hiddenRepCount.value = lastRepCount || 0;
-      if (hiddenDuration) hiddenDuration.value = currentDuration;
-      if (hiddenAccuracy) hiddenAccuracy.value = currentAccuracy;
-    });
-  }
-
-  btnVoiceToggle.addEventListener("click", () => {
-    voiceEnabled = !voiceEnabled;
-    if (voiceEnabled) {
-      btnVoiceToggle.className = "btn-ghost voice-toggle-btn";
-      voiceLabel.textContent = "Errors Only";
-    } else {
-      btnVoiceToggle.className = "btn-ghost voice-toggle-btn";
-      btnVoiceToggle.style.color = "var(--accent-red)";
-      voiceLabel.textContent = "Muted";
-      if (window.speechSynthesis) window.speechSynthesis.cancel();
-    }
-  });
-
-  btnPauseCamera.addEventListener("click", async () => {
-    isCameraPaused = !isCameraPaused;
-    if (isCameraPaused) {
-      pauseIcon.textContent = "▶️";
-      pauseText.textContent = "Resume Feed";
-      await fetch("/pause_feed", { method: "POST" });
-      if (currentInputSource !== "browser_cam") {
-        videoFeedImg.src = "";
-      }
-    } else {
-      pauseIcon.textContent = "⏸️";
-      pauseText.textContent = "Pause Feed";
-      await fetch("/resume_feed", { method: "POST" });
-      if (currentInputSource === "browser_cam") {
-        if (!isCapturing && webcamStream) {
-          isCapturing = true;
-          runCameraCaptureLoop();
-        }
-      } else {
-        videoFeedImg.src = "/video_feed?t=" + Date.now();
-      }
-    }
-  });
-
-  function stopBrowserWebcam() {
-    isCapturing = false;
-    if (webcamStream) {
-      webcamStream.getTracks().forEach(t => t.stop());
-      webcamStream = null;
-    }
-    if (clientWebcam) clientWebcam.srcObject = null;
-    if (currentBlobUrl) {
-      URL.revokeObjectURL(currentBlobUrl);
-      currentBlobUrl = null;
-    }
-  }
-
-  window.addEventListener("pagehide", () => {
-    stopBrowserWebcam();
-    navigator.sendBeacon("/pause_feed");
-  });
-  window.addEventListener("beforeunload", () => {
-    stopBrowserWebcam();
-    navigator.sendBeacon("/pause_feed");
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") navigator.sendBeacon("/pause_feed");
-  });
-
-  // High-performance DOM diffing helpers (eliminate unnecessary style recalc and reflow)
-  function updateText(el, text) {
-    if (el && el.textContent !== text) {
-      el.textContent = text;
-    }
-  }
-  function updateClass(el, className) {
-    if (el && el.className !== className) {
-      el.className = className;
-    }
-  }
-  function updateStyle(el, prop, val) {
-    if (el && el.style[prop] !== val) {
-      el.style[prop] = val;
-    }
-  }
-
-  // Telemetry update handler
-  function updateTelemetry(data) {
-    if (!data) return;
-
-    if (lastRepCount === null) {
-      lastRepCount = data.reps;
-      updateText(repsEl, String(data.reps));
-      updateText(hudRepCount, String(data.reps));
-    } else if (data.reps !== lastRepCount) {
-      if (data.reps > lastRepCount) {
-        playRepChime();
-        // Rep Counter Visual Effect: Scale Pulse, Glowing Neon Accent Ring (#facc15), & Particle Burst
-        triggerRepParticleBurst();
-
-        if (hudRepPillContainer) {
-          hudRepPillContainer.classList.add("rep-counter-glow", "rep-pulse");
-        }
-        if (mainRepBox) {
-          mainRepBox.classList.add("rep-box-glow");
-        }
-        if (repsEl) repsEl.classList.add("rep-pulse");
-
-        setTimeout(() => {
-          if (hudRepPillContainer) {
-            hudRepPillContainer.classList.remove("rep-counter-glow", "rep-pulse");
-          }
-          if (mainRepBox) {
-            mainRepBox.classList.remove("rep-box-glow");
-          }
-          if (repsEl) repsEl.classList.remove("rep-pulse");
-        }, 450);
-      }
-      lastRepCount = data.reps;
-      updateText(repsEl, String(data.reps));
-      updateText(hudRepCount, String(data.reps));
-    }
-
-    if (data.duration_seconds !== undefined) {
-      currentDuration = data.duration_seconds;
-      updateText(sessionTimerEl, formatTime(data.duration_seconds));
-    }
-    if (data.avg_form_accuracy !== undefined) {
-      currentAccuracy = data.avg_form_accuracy;
-    } else if (data.form_score !== undefined) {
-      currentAccuracy = data.form_score;
-    }
-
-    const isDown = data.stage === "down";
-    const phaseText = isDown ? "DOWN" : "UP";
-    updateText(phaseBadgeEl, phaseText);
-    updateClass(phaseBadgeEl, isDown ? "pill-tag pill-yellow" : "pill-tag pill-gray");
-    if (hudStagePill) {
-      updateText(hudStagePill, phaseText);
-      updateStyle(hudStagePill, "color", isDown ? "#facc15" : "#9ca3af");
-      updateStyle(hudStagePill, "background", isDown ? "rgba(250, 204, 21, 0.22)" : "rgba(255, 255, 255, 0.08)");
-    }
-
-    let exerciseDisplayName = "Squats";
-    const pAngleRound = Math.round(data.primary_angle) + "°";
-    if (data.exercise === "squat") {
-      exerciseDisplayName = "Squats";
-      updateText(primaryAngleLabel, "Knee Angle");
-      updateText(primaryAngleVal, pAngleRound);
-      updateText(secondaryAngleLabel, "Target Depth");
-      updateText(secondaryAngleVal, "≤ 100°");
-      updateText(activeSideText, `Active: ${data.active_side === 'right' ? 'Right Leg' : 'Left Leg'}`);
-    } else if (data.exercise === "pushup") {
-      exerciseDisplayName = "Push-ups";
-      updateText(primaryAngleLabel, "Elbow Angle");
-      updateText(primaryAngleVal, pAngleRound);
-      updateText(secondaryAngleLabel, "Spine Angle");
-      updateText(secondaryAngleVal, Math.round(data.secondary_angle) + "°");
-      updateText(activeSideText, `Flare: ${Math.round(data.flare_angle)}° (≤ 75°)`);
-    } else {
-      exerciseDisplayName = "Dumbbell Curls";
-      updateText(primaryAngleLabel, "Arm Angle");
-      updateText(primaryAngleVal, pAngleRound);
-      updateText(secondaryAngleLabel, "Curl Range");
-      updateText(secondaryAngleVal, "< 40° / > 150°");
-      updateText(activeSideText, `Active: ${data.active_side === 'right' ? 'Right Arm' : 'Left Arm'}`);
-    }
-    updateText(hudAnglePill, pAngleRound);
-    updateText(hudExerciseMode, exerciseDisplayName);
-
-    const score = Math.max(0, Math.min(100, data.form_score));
-    const scoreStr = score + "%";
-    updateText(scoreValEl, scoreStr);
-    updateStyle(scoreBarEl, "width", scoreStr);
-    updateText(hudScorePill, scoreStr);
-
-    updateText(feedbackMsg, data.feedback);
-    updateText(hudFormStatus, data.feedback);
-
-    const hasWarnings = data.warnings && data.warnings.length > 0;
-    if (hasWarnings) {
-      updateStyle(feedbackBanner, "background", "rgba(239, 68, 68, 0.1)");
-      updateStyle(feedbackBanner, "borderColor", "rgba(239, 68, 68, 0.3)");
-      updateStyle(feedbackAvatar, "background", "var(--accent-red)");
-      updateStyle(feedbackAvatar, "color", "#ffffff");
-      updateText(hudStatusIcon, "⚠️");
-      updateStyle(hudFormStatus, "color", "#f87171");
-      if (hudScorePill) {
-        updateStyle(hudScorePill, "color", "#f87171");
-        updateStyle(hudScorePill, "background", "rgba(239, 68, 68, 0.18)");
-      }
-    } else {
-      updateStyle(feedbackBanner, "background", "rgba(250, 204, 21, 0.12)");
-      updateStyle(feedbackBanner, "borderColor", "rgba(250, 204, 21, 0.4)");
-      updateStyle(feedbackAvatar, "background", "#facc15");
-      updateStyle(feedbackAvatar, "color", "#18181b");
-      updateText(hudStatusIcon, "⚡");
-      updateStyle(hudFormStatus, "color", "#ffffff");
-      if (hudScorePill) {
-        updateStyle(hudScorePill, "color", "#facc15");
-        updateStyle(hudScorePill, "background", "rgba(250, 204, 21, 0.18)");
-      }
-    }
-
-    if (data.vocal_message) {
-      speakFormError(data.vocal_message);
-    }
-  }
-
-  // Poll /status endpoint (paused when browser_cam is active since X-Metrics provides live telemetry)
-  async function pollStatus() {
-    if (currentInputSource === "browser_cam" && isCapturing && !isCameraPaused) {
-      return;
-    }
-    try {
-      const res = await fetch("/status");
-      if (res.ok) {
-        const data = await res.json();
-        updateTelemetry(data);
-      }
-    } catch (e) {}
-  }
-  setInterval(pollStatus, 200);
-
-  // Exercise Mode Switcher Pill logic
-  async function switchExercise(ex) {
-    modePills.forEach(p => {
-      if (p.getAttribute("data-exercise") === ex) {
-        p.classList.add("active");
-      } else {
-        p.classList.remove("active");
-      }
-    });
-    if (exerciseSelect) exerciseSelect.value = ex;
-    if (hiddenExercise) {
-      hiddenExercise.value = ex === "squat" ? "Squats" : (ex === "pushup" ? "Push-Ups" : "Dumbbell Curls");
-    }
-    await fetch("/set_exercise", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ exercise: ex })
-    });
-    if (currentInputSource !== "browser_cam" && !isCameraPaused) {
-      videoFeedImg.src = "/video_feed?t=" + Date.now();
-    }
-  }
-
-  modePills.forEach(pill => {
-    pill.addEventListener("click", () => {
-      const ex = pill.getAttribute("data-exercise");
-      switchExercise(ex);
-    });
-  });
-
-  // Auto-switch mode if URL has query parameter e.g. /workout?exercise=pushup
-  const urlParams = new URLSearchParams(window.location.search);
-  const exParam = urlParams.get('exercise');
-  if (exParam && ['squat', 'pushup', 'curl'].includes(exParam.toLowerCase())) {
-    switchExercise(exParam.toLowerCase());
-  }
-
-  // Browser Camera Frame Capture Loop
-  function runCameraCaptureLoop() {
-    if (!isCapturing || currentInputSource !== "browser_cam" || isCameraPaused) return;
-
-    if (clientWebcam && clientWebcam.readyState >= 2 && captureCanvas && captureCtx) {
-      const vw = 640;
-      const vh = 480;
-      if (captureCanvas.width !== vw) captureCanvas.width = vw;
-      if (captureCanvas.height !== vh) captureCanvas.height = vh;
-
-      // Draw mirrored frame for natural selfie perspective
-      captureCtx.save();
-      captureCtx.translate(vw, 0);
-      captureCtx.scale(-1, 1);
-      captureCtx.drawImage(clientWebcam, 0, 0, vw, vh);
-      captureCtx.restore();
-
-      if (isSendingFrame) {
-        requestAnimationFrame(runCameraCaptureLoop);
-        return;
-      }
-
-      isSendingFrame = true;
-      captureCanvas.toBlob(async (blob) => {
-        if (!blob || !isCapturing || currentInputSource !== "browser_cam") {
-          isSendingFrame = false;
-          if (isCapturing && !isCameraPaused) requestAnimationFrame(runCameraCaptureLoop);
+        if (data && data.summary_url) {
+          window.location.href = data.summary_url;
           return;
         }
-
-        try {
-          const res = await fetch("/process_frame", {
-            method: "POST",
-            body: blob,
-            headers: { "Content-Type": "image/jpeg" }
-          });
-
-          if (res.ok) {
-            const metricsHeader = res.headers.get("X-Metrics");
-            if (metricsHeader) {
-              try {
-                const metrics = JSON.parse(decodeURIComponent(metricsHeader));
-                updateTelemetry(metrics);
-              } catch (e) {}
-            }
-
-            const processedBlob = await res.blob();
-            const newUrl = URL.createObjectURL(processedBlob);
-            const oldUrl = currentBlobUrl;
-            currentBlobUrl = newUrl;
-            videoFeedImg.onload = () => {
-              if (oldUrl) URL.revokeObjectURL(oldUrl);
-            };
-            videoFeedImg.src = newUrl;
-          }
-        } catch (e) {
-          console.warn("Frame upload error:", e);
-        } finally {
-          isSendingFrame = false;
-        }
-
-        if (isCapturing && currentInputSource === "browser_cam" && !isCameraPaused) {
-          requestAnimationFrame(runCameraCaptureLoop);
-        }
-      }, "image/jpeg", 0.70);
-
-    } else {
-      requestAnimationFrame(runCameraCaptureLoop);
-    }
-  }
-
-  // Source Selector handler
-  sourceSelect.addEventListener("change", async (e) => {
-    const selected = e.target.value;
-    currentInputSource = selected;
-
-    if (selected !== "browser_cam") {
-      stopBrowserWebcam();
-      const res = await fetch("/set_source", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: selected })
-      });
-      const data = await res.json();
-      if (selected === "webcam" && data.source === "demo") {
-        alert("Physical webcam device 0 is unavailable. Falling back to demo video.");
-        sourceSelect.value = "demo";
-        currentInputSource = "demo";
       }
-      if (!isCameraPaused) {
-        videoFeedImg.src = "/video_feed?t=" + Date.now();
-      }
-      return;
-    }
-
-    // Selected 'browser_cam'
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      alert("Browser camera access requires HTTPS or localhost and a supported browser.");
-      sourceSelect.value = "demo";
-      currentInputSource = "demo";
-      return;
-    }
-
-    try {
-      feedbackMsg.textContent = "Requesting browser camera permission...";
-      if (hudFormStatus) hudFormStatus.textContent = "Requesting browser camera...";
-
-      webcamStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
-        audio: false
-      });
-      clientWebcam.srcObject = webcamStream;
-      await clientWebcam.play();
-
-      await fetch("/set_source", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: "browser_cam" })
-      });
-
-      isCapturing = true;
-      runCameraCaptureLoop();
+      window.location.href = "/dashboard";
     } catch (err) {
-      console.error("Camera access error:", err);
-      let errMsg = "Could not access browser camera.";
-      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-        errMsg = "Camera permission was denied. Please allow camera access in browser site settings.";
-      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
-        errMsg = "No camera hardware detected on this device.";
-      } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
-        errMsg = "Camera is currently in use by another application.";
-      } else {
-        errMsg += " " + (err.message || err.name);
-      }
-      alert(errMsg);
-
-      sourceSelect.value = "demo";
-      currentInputSource = "demo";
-      stopBrowserWebcam();
-      await fetch("/set_source", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: "demo" })
-      });
-      videoFeedImg.src = "/video_feed?t=" + Date.now();
+      console.error("Error saving workout session:", err);
+      window.location.href = "/dashboard";
     }
   });
+}
 
-  // Reset Reps Handler
-  btnResetSession.addEventListener("click", async () => {
-    await fetch("/reset", { method: "POST" });
-    lastRepCount = 0;
-    repsEl.textContent = "0";
-    if (hudRepCount) hudRepCount.textContent = "0";
-  });
+// Window Cleanup
+window.addEventListener("pagehide", stopWebcamStream);
+window.addEventListener("beforeunload", stopWebcamStream);
+
+// Initialize on DOM load
+document.addEventListener("DOMContentLoaded", () => {
+  // Check URL exercise query param
+  const urlParams = new URLSearchParams(window.location.search);
+  const exParam = urlParams.get('exercise');
+  const initialEx = (exParam && ['squat', 'pushup', 'curl'].includes(exParam.toLowerCase()))
+    ? exParam.toLowerCase()
+    : 'squat';
+
+  initMediaPipePose();
+  switchExercise(initialEx);
+  setDemoSource(initialEx);
+  trackingLoop();
+});
 </script>
 {% endblock %}
