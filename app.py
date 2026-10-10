@@ -173,6 +173,14 @@ def ema_filter(current_val, prev_val, alpha=0.35):
     return float(alpha * current_val + (1.0 - alpha) * prev_val)
 
 
+class MockLandmark:
+    """Mock landmark wrapper for synthetic animation frames."""
+    def __init__(self, x, y, visibility=1.0):
+        self.x = float(x)
+        self.y = float(y)
+        self.visibility = float(visibility)
+
+
 # ---------------------------------------------------------
 # EXERCISE FORM & REPETITION TRACKER
 # ---------------------------------------------------------
@@ -181,7 +189,7 @@ class ExerciseTracker:
         self.lock = threading.Lock()
         self.exercise = "squat"  # "squat", "pushup", or "curl"
         self.counter = 0
-        self.stage = "up"        # "up" or "down" (for curl: "down"=extended, "up"=curled)
+        self.stage = "up"        # for squat/pushup: "up"/"down"; for curl: "down" (extended) / "up" (curled)
 
         # Filtered Joint Angles
         self.smoothed_primary_angle = 180.0
@@ -285,18 +293,22 @@ class ExerciseTracker:
                 "active_side": self.active_side
             }
 
-    def process_frame(self, frame):
+    def process_frame(self, frame, custom_landmarks=None):
         h, w, _ = frame.shape
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = self.landmarker.detect(mp_image)
+        landmarks = custom_landmarks
+
+        if landmarks is None:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result = self.landmarker.detect(mp_image)
+            if result.pose_landmarks and len(result.pose_landmarks) > 0:
+                landmarks = result.pose_landmarks[0]
 
         with self.lock:
             audio_ev = None
             vocal_msg = None
 
-            if result.pose_landmarks and len(result.pose_landmarks) > 0:
-                landmarks = result.pose_landmarks[0]
+            if landmarks is not None:
                 self.warning_flags = []
 
                 if self.exercise == "squat":
@@ -441,7 +453,7 @@ class ExerciseTracker:
         Push-up tracking:
         Speaks ONLY on specific form errors:
           - Sagging back / hip alignment: 'Raise your hips!'
-          - Chest fail: 'Lower your chest!'
+          - Chest depth fail: 'Lower your chest!'
         Silent on standard movement and rep counts.
         """
         l_shoulder = [landmarks[11].x * w, landmarks[11].y * h]
@@ -483,7 +495,7 @@ class ExerciseTracker:
         back_sags = False
         if spine_angle < 160.0:
             back_sags = True
-            self.warning_flags.append("Hips sagging! Raise your hips to keep straight plank.")
+            self.warning_flags.append("Hips sagging! Raise hips to keep straight plank.")
             self.rep_score_deductions.add("spine_sag")
 
         elbow_flare = False
@@ -561,72 +573,81 @@ class ExerciseTracker:
     def _process_curl(self, landmarks, w, h):
         """
         Dumbbell Curls tracking:
-        Track left/right arm angle (Shoulder-Elbow-Wrist).
-        Increment rep count when moving from extension (>160 degrees) to full curl (<30 degrees).
-        Vocal warning on form error: 'Full extension required!'
+        - Track arm angle (Shoulder-Elbow-Wrist).
+        - Increment rep count ONLY with strict hysteresis:
+          Moving from extension (>150 deg) to full curl (<40 deg), then returning to extension (>150 deg).
+        - Form Error: If elbow moves excessively away from torso (>35 deg), speak 'Keep your elbows tucked!'.
         """
         l_shoulder = [landmarks[11].x * w, landmarks[11].y * h]
         l_elbow = [landmarks[13].x * w, landmarks[13].y * h]
         l_wrist = [landmarks[15].x * w, landmarks[15].y * h]
+        l_hip = [landmarks[23].x * w, landmarks[23].y * h]
 
         r_shoulder = [landmarks[12].x * w, landmarks[12].y * h]
         r_elbow = [landmarks[14].x * w, landmarks[14].y * h]
         r_wrist = [landmarks[16].x * w, landmarks[16].y * h]
+        r_hip = [landmarks[24].x * w, landmarks[24].y * h]
 
         l_vis = getattr(landmarks[13], 'visibility', 1.0)
         r_vis = getattr(landmarks[14], 'visibility', 1.0)
 
         if r_vis >= l_vis:
-            shoulder, elbow, wrist = r_shoulder, r_elbow, r_wrist
+            shoulder, elbow, wrist, hip = r_shoulder, r_elbow, r_wrist, r_hip
             self.active_side = "right"
         else:
-            shoulder, elbow, wrist = l_shoulder, l_elbow, l_wrist
+            shoulder, elbow, wrist, hip = l_shoulder, l_elbow, l_wrist, l_hip
             self.active_side = "left"
 
         raw_arm_angle = calculate_angle(shoulder, elbow, wrist)
-        self.smoothed_primary_angle = ema_filter(raw_arm_angle, self.smoothed_primary_angle, alpha=0.35)
-        arm_angle = self.smoothed_primary_angle
+        raw_flare_angle = calculate_elbow_flare(shoulder, hip, elbow)
 
-        # Secondary stat: target curl angle
-        self.smoothed_secondary_angle = 30.0
+        self.smoothed_primary_angle = ema_filter(raw_arm_angle, self.smoothed_primary_angle, alpha=0.35)
+        self.smoothed_flare_angle = ema_filter(raw_flare_angle, self.smoothed_flare_angle, alpha=0.35)
+        self.smoothed_secondary_angle = 40.0
+
+        arm_angle = self.smoothed_primary_angle
+        flare_angle = self.smoothed_flare_angle
+
+        # Form error check: Elbow flared (> 35 deg lateral angle from torso)
+        elbow_flared = False
+        if flare_angle > 35.0:
+            elbow_flared = True
+            self.warning_flags.append("Elbow flaring outward! Keep elbows tucked.")
+            self.rep_score_deductions.add("elbow_flare")
 
         audio_ev = None
         vocal_msg = None
 
-        # Dumbbell Curls State Machine:
-        # stage == "down": arm extending/extended (starts towards >160°)
-        # stage == "up": reached full curl (<30°)
+        # Hysteresis state machine:
+        # stage == "down": Arm in extension (>150 deg). Waiting to reach full curl (<40 deg).
+        # stage == "up": Full curl reached (<40 deg). Waiting to return to full extension (>150 deg) to complete rep.
+        EXT_THRESH = 150.0
+        CURL_THRESH = 40.0
+
         if self.stage == "down":
             self.max_angle_in_rep = max(self.max_angle_in_rep, arm_angle)
-            
-            # Check for lack of full extension if user starts curling before arm opens
-            if arm_angle < 110.0 and self.max_angle_in_rep < 155.0:
-                self.warning_flags.append("Incomplete extension! Fully lower dumbbell.")
-                self.rep_score_deductions.add("incomplete_extension")
-                audio_ev = "warn_extension"
-                vocal_msg = "Full extension required!"
 
-            if arm_angle <= 30.0:
-                # Reached peak contraction / full curl (< 30 deg)
+            # Reached full curl contraction (< 40 deg)
+            if arm_angle <= CURL_THRESH:
                 self.stage = "up"
                 self.min_angle_in_rep = arm_angle
-                self.feedback = "Peak Curl! Now lower with control"
+                self.feedback = "Peak Curl Reached (<40°)! Now lower slowly"
             elif arm_angle < 90.0:
-                self.feedback = "Curling up... Target < 30°"
+                self.feedback = "Curling up... Target < 40°"
             else:
-                self.feedback = "Arm extended. Begin curl"
+                self.feedback = "Arm extended (>150°). Begin curl"
 
         elif self.stage == "up":
-            # Descending from curl to extension
-            if arm_angle >= 160.0:
-                # Rep completed on full extension (> 160 deg)
+            # Moving down towards full extension
+            if arm_angle >= EXT_THRESH:
+                # Rep Complete upon full extension (> 150 deg)
                 self.stage = "down"
                 self.counter += 1
                 self.last_rep_time = time.time()
                 self.max_angle_in_rep = arm_angle
 
                 deductions = 0
-                if "incomplete_extension" in self.rep_score_deductions:
+                if "elbow_flare" in self.rep_score_deductions:
                     deductions += 30
 
                 rep_score = max(40, 100 - deductions)
@@ -637,15 +658,21 @@ class ExerciseTracker:
                 if deductions == 0:
                     self.feedback = f"Rep #{self.counter} Complete! Full Extension & Curl (100%)"
                 else:
-                    self.feedback = f"Rep #{self.counter} Complete ({rep_score}% Form) - Full extension next time"
+                    self.feedback = f"Rep #{self.counter} Complete ({rep_score}% Form) - Keep elbows tucked next time"
 
                 # ZERO speech on rep completion
                 audio_ev = None
                 vocal_msg = None
             elif arm_angle > 80.0:
-                self.feedback = "Extending arm... Lower past 160°"
+                self.feedback = "Extending arm... Lower past 150°"
             else:
                 self.feedback = "Lower arm with control"
+
+        # Form Errors: Trigger speech ONLY on specific form errors
+        if audio_ev is None:
+            if elbow_flared:
+                audio_ev = "warn_elbow_tuck"
+                vocal_msg = "Keep your elbows tucked!"
 
         return audio_ev, vocal_msg
 
@@ -715,6 +742,90 @@ class ExerciseTracker:
 
 
 # ---------------------------------------------------------
+# SYNTHETIC DEMO GENERATOR ENGINE
+# ---------------------------------------------------------
+class SyntheticDemoEngine:
+    """
+    Generates synthetic realistic animated pose frames for Dumbbell Curls,
+    Squats, and Push-ups if physical webcam or video assets are unavailable.
+    """
+    def __init__(self, width=640, height=480):
+        self.w = width
+        self.h = height
+
+    def generate(self, exercise, t):
+        frame = np.zeros((self.h, self.w, 3), dtype=np.uint8)
+        # Background subtle gym styling
+        cv2.rectangle(frame, (0, 0), (self.w, self.h), (12, 17, 28), -1)
+        cv2.line(frame, (0, int(self.h * 0.88)), (self.w, int(self.h * 0.88)), (25, 35, 55), 2)
+
+        # 33 MediaPipe pose landmarks list initialization
+        landmarks = [MockLandmark(0.5, 0.5) for _ in range(33)]
+
+        if exercise == "curl":
+            # Bicep curl sinusoidal animation (period ~ 3.0s)
+            cycle = (math.sin(t * 2.1) + 1.0) / 2.0  # 0.0 (extended) to 1.0 (curled)
+            arm_angle_deg = 160.0 - cycle * 125.0    # 160° down to 35°
+            arm_rad = math.radians(arm_angle_deg)
+
+            sh_x, sh_y = 350, 170
+            el_x, el_y = 355, 270
+            wr_x = el_x - int(85 * math.sin(arm_rad))
+            wr_y = el_y - int(85 * math.cos(arm_rad))
+
+            landmarks[11] = MockLandmark(290 / self.w, 170 / self.h)
+            landmarks[12] = MockLandmark(sh_x / self.w, sh_y / self.h)
+            landmarks[13] = MockLandmark(285 / self.w, 270 / self.h)
+            landmarks[14] = MockLandmark(el_x / self.w, el_y / self.h)
+            landmarks[15] = MockLandmark(285 / self.w, 350 / self.h)
+            landmarks[16] = MockLandmark(wr_x / self.w, wr_y / self.h)
+            landmarks[23] = MockLandmark(300 / self.w, 290 / self.h)
+            landmarks[24] = MockLandmark(340 / self.w, 290 / self.h)
+            landmarks[25] = MockLandmark(300 / self.w, 380 / self.h)
+            landmarks[26] = MockLandmark(340 / self.w, 380 / self.h)
+            landmarks[27] = MockLandmark(300 / self.w, 440 / self.h)
+            landmarks[28] = MockLandmark(340 / self.w, 440 / self.h)
+
+            # Draw dumbbell at hand position
+            cv2.circle(frame, (wr_x - 12, wr_y), 10, (140, 150, 160), -1)
+            cv2.circle(frame, (wr_x + 12, wr_y), 10, (140, 150, 160), -1)
+            cv2.line(frame, (wr_x - 12, wr_y), (wr_x + 12, wr_y), (200, 210, 220), 4)
+
+        elif exercise == "squat":
+            cycle = (math.sin(t * 2.0) + 1.0) / 2.0
+            hip_y = int(240 + cycle * 85)
+            knee_y = 360
+            knee_x = int(320 - cycle * 35)
+
+            landmarks[11] = MockLandmark(310 / self.w, (hip_y - 100) / self.h)
+            landmarks[12] = MockLandmark(330 / self.w, (hip_y - 100) / self.h)
+            landmarks[23] = MockLandmark(310 / self.w, hip_y / self.h)
+            landmarks[24] = MockLandmark(330 / self.w, hip_y / self.h)
+            landmarks[25] = MockLandmark(knee_x / self.w, knee_y / self.h)
+            landmarks[26] = MockLandmark((knee_x + 20) / self.w, knee_y / self.h)
+            landmarks[27] = MockLandmark(320 / self.w, 440 / self.h)
+            landmarks[28] = MockLandmark(340 / self.w, 440 / self.h)
+
+        else: # pushup
+            cycle = (math.sin(t * 2.0) + 1.0) / 2.0
+            sh_y = int(230 + cycle * 70)
+            hip_y = int(250 + cycle * 50)
+
+            landmarks[11] = MockLandmark(230 / self.w, sh_y / self.h)
+            landmarks[12] = MockLandmark(240 / self.w, sh_y / self.h)
+            landmarks[13] = MockLandmark(210 / self.w, (sh_y + 40) / self.h)
+            landmarks[14] = MockLandmark(220 / self.w, (sh_y + 40) / self.h)
+            landmarks[15] = MockLandmark(240 / self.w, 360 / self.h)
+            landmarks[16] = MockLandmark(250 / self.w, 360 / self.h)
+            landmarks[23] = MockLandmark(360 / self.w, hip_y / self.h)
+            landmarks[24] = MockLandmark(370 / self.w, hip_y / self.h)
+            landmarks[27] = MockLandmark(480 / self.w, 340 / self.h)
+            landmarks[28] = MockLandmark(490 / self.w, 340 / self.h)
+
+        return frame, landmarks
+
+
+# ---------------------------------------------------------
 # VIDEO STREAM & MULTI-SOURCE MANAGER
 # ---------------------------------------------------------
 class VideoStreamManager:
@@ -725,6 +836,8 @@ class VideoStreamManager:
         self.latest_frame_bytes = None
         self.lock = threading.Lock()
         self.running = True
+        self.synthetic_engine = SyntheticDemoEngine(640, 480)
+        self.synthetic_time = 0.0
         self._open_source()
 
         self.thread = threading.Thread(target=self._capture_loop, daemon=True)
@@ -733,7 +846,9 @@ class VideoStreamManager:
     def _get_demo_path(self):
         if self.tracker.exercise == "pushup" and os.path.exists(PUSHUP_DEMO_PATH):
             return PUSHUP_DEMO_PATH
-        return SQUAT_DEMO_PATH
+        if self.tracker.exercise == "squat" and os.path.exists(SQUAT_DEMO_PATH):
+            return SQUAT_DEMO_PATH
+        return None
 
     def _open_source(self):
         if self.cap is not None:
@@ -744,14 +859,16 @@ class VideoStreamManager:
             print("[*] Opening physical webcam cv2.VideoCapture(0)...")
             self.cap = cv2.VideoCapture(0)
             if not self.cap.isOpened():
-                print("[!] Physical webcam device not found, falling back to demo video.")
+                print("[!] Physical webcam device not found, falling back to demo engine.")
                 self.source_mode = "demo"
                 demo_path = self._get_demo_path()
-                self.cap = cv2.VideoCapture(demo_path)
+                if demo_path:
+                    self.cap = cv2.VideoCapture(demo_path)
         elif self.source_mode == "demo":
             demo_path = self._get_demo_path()
-            print(f"[*] Opening demo video source: {demo_path}")
-            self.cap = cv2.VideoCapture(demo_path)
+            if demo_path:
+                print(f"[*] Opening demo video source: {demo_path}")
+                self.cap = cv2.VideoCapture(demo_path)
 
     def set_source(self, mode):
         with self.lock:
@@ -774,28 +891,31 @@ class VideoStreamManager:
                 continue
 
             start_t = time.time()
-            with self.lock:
-                if self.cap is None or not self.cap.isOpened():
-                    self._open_source()
+            self.synthetic_time += frame_interval
 
-                ret, frame = (False, None)
+            frame = None
+            custom_landmarks = None
+
+            with self.lock:
+                # 1. Try physical/demo capture if available
                 if self.cap and self.cap.isOpened():
                     ret, frame = self.cap.read()
                     if not ret:
                         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                         ret, frame = self.cap.read()
 
-                if not ret or frame is None:
-                    frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                    cv2.putText(frame, "Waiting for video source...", (140, 240),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 198), 2)
+                # 2. Seamless Synthetic Demo Fallback if no camera/video exists (e.g. for Dumbbell Curls)
+                if frame is None:
+                    frame, custom_landmarks = self.synthetic_engine.generate(
+                        self.tracker.exercise, self.synthetic_time
+                    )
 
             h, w = frame.shape[:2]
             if w > 720:
                 scale = 720.0 / w
                 frame = cv2.resize(frame, (720, int(h * scale)), interpolation=cv2.INTER_AREA)
 
-            processed = self.tracker.process_frame(frame)
+            processed = self.tracker.process_frame(frame, custom_landmarks=custom_landmarks)
             ret, buf = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 75])
             if ret:
                 with self.lock:
@@ -986,7 +1106,7 @@ WORKOUT_BODY = """
       <div style="display: flex; align-items: center; gap: 10px;">
         <label for="source-select" style="font-size: 0.82rem; font-weight: 700; color: var(--subtext);">Input:</label>
         <select id="source-select" class="custom-select">
-          <option value="demo" selected>📹 Demo Video</option>
+          <option value="demo" selected>📹 Demo Video Engine</option>
           <option value="webcam">🎥 Live Webcam (cv2.VideoCapture(0))</option>
           <option value="browser_cam">💻 Browser Camera (getUserMedia)</option>
         </select>
@@ -1005,7 +1125,7 @@ WORKOUT_BODY = """
       <div class="stat-val" id="reps-num" style="font-size: 4.2rem; line-height: 1; margin: 12px 0;">0</div>
       <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; color: var(--subtext); border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px;">
         <span>Session Time: <strong id="session-timer-text" style="color: var(--accent); font-family: var(--mono);">00:00</strong></span>
-        <span id="active-side-text">Right Leg</span>
+        <span id="active-side-text">Right Side</span>
       </div>
     </div>
 
@@ -1016,7 +1136,7 @@ WORKOUT_BODY = """
         <div class="stat-val" id="primary-angle-val" style="font-size: 1.8rem;">180°</div>
       </div>
       <div class="card" style="padding: 16px;">
-        <span style="font-size: 0.74rem; font-weight: 800; color: var(--subtext); text-transform: uppercase;" id="secondary-angle-label">Target Depth</span>
+        <span style="font-size: 0.74rem; font-weight: 800; color: var(--subtext); text-transform: uppercase;" id="secondary-angle-label">Target Angle</span>
         <div class="stat-val" id="secondary-angle-val" style="font-size: 1.8rem;">≤ 100°</div>
       </div>
     </div>
@@ -1110,7 +1230,7 @@ WORKOUT_BODY = """
   // - Speaks ONLY on specific form errors (warn_*)
   //   * Squats: 'Squat deeper!' or 'Keep your knees out!'
   //   * Push-ups: 'Lower your chest!' or 'Raise your hips!'
-  //   * Dumbbell Curls: 'Full extension required!'
+  //   * Dumbbell Curls: 'Keep your elbows tucked!'
   // - SILENT during good form, starting position, and successful rep counts
   // - Strict 4-second delay throttle between alerts
   // ----------------------------------------------------
@@ -1172,10 +1292,10 @@ WORKOUT_BODY = """
       secondaryAngleVal.textContent = Math.round(data.secondary_angle) + "°";
       activeSideText.textContent = `Flare: ${Math.round(data.flare_angle)}° (≤ 75°)`;
     } else {
-      primaryAngleLabel.textContent = "Elbow Angle";
+      primaryAngleLabel.textContent = "Arm Angle";
       primaryAngleVal.textContent = Math.round(data.primary_angle) + "°";
-      secondaryAngleLabel.textContent = "Curl Target";
-      secondaryAngleVal.textContent = "< 30° / > 160°";
+      secondaryAngleLabel.textContent = "Curl Range";
+      secondaryAngleVal.textContent = "< 40° / > 150°";
       activeSideText.textContent = `Active: ${data.active_side === 'right' ? 'Right Arm' : 'Left Arm'}`;
     }
 
