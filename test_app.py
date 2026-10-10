@@ -3,7 +3,11 @@ import numpy as np
 import cv2
 import json
 import urllib.parse
-from app import app, db, tracker, stream_mgr, User, ExerciseSession, Badge, calculate_angle, calculate_elbow_flare, ema_filter
+from app import (
+    app, db, tracker, stream_mgr, User, ExerciseSession, Badge,
+    calculate_angle, calculate_elbow_flare, ema_filter,
+    OneEuroFilter, LandmarkSmoother, MockLandmark
+)
 
 
 class ExerciseTrackerTestCase(unittest.TestCase):
@@ -346,6 +350,164 @@ class ExerciseTrackerTestCase(unittest.TestCase):
         self.assertEqual(res_reg.status_code, 200)
         self.assertIn(b'Create Account', res_reg.data)
         self.assertIn(b'auth-card', res_reg.data)
+
+
+    def test_one_euro_filter_stationary_and_dynamic(self):
+        f = OneEuroFilter(min_cutoff=1.0, beta=0.01)
+        # Stationary signal: noisy fluctuations around 100
+        val = f.filter(100.0, 0.0)
+        self.assertEqual(val, 100.0)
+
+        # Small jitter (100.1, 99.9) is heavily smoothed
+        filtered_jitter = f.filter(100.5, 0.033)
+        self.assertLess(abs(filtered_jitter - 100.0), 0.3)
+
+        # Dynamic rapid movement (jump to 150)
+        filtered_fast = f.filter(150.0, 0.066)
+        # Filter should adaptively increase cutoff and move substantially toward target
+        self.assertGreater(filtered_fast, 110.0)
+
+        # Reset functionality
+        f.reset(180.0)
+        self.assertEqual(f.x_prev, 180.0)
+
+    def test_landmark_smoother_occlusion_and_jitter(self):
+        smoother = LandmarkSmoother(min_cutoff=1.2, beta=0.04)
+        raw_lms = [
+            MockLandmark(0.5, 0.5, visibility=0.9),
+            MockLandmark(0.4, 0.8, visibility=0.95),
+            MockLandmark(0.3, 0.2, visibility=0.2)  # Low visibility
+        ]
+        smoothed_1 = smoother.smooth(raw_lms, t=0.0)
+        self.assertEqual(len(smoothed_1), 3)
+        self.assertAlmostEqual(smoothed_1[0].x, 0.5, places=2)
+
+        # Next frame with jitter
+        raw_lms_2 = [
+            MockLandmark(0.52, 0.51, visibility=0.9),
+            MockLandmark(0.41, 0.81, visibility=0.95),
+            MockLandmark(0.35, 0.25, visibility=0.1)  # Occluded
+        ]
+        smoothed_2 = smoother.smooth(raw_lms_2, t=0.033)
+        # Occluded landmark smoothly retains coordinate without wild jumping
+        self.assertAlmostEqual(smoothed_2[2].x, 0.3, places=1)
+
+    def test_browser_cam_source_switching_and_streaming(self):
+        # 1. Switch to browser_cam
+        res_switch = self.app.post('/set_source', json={'source': 'browser_cam'})
+        self.assertEqual(res_switch.status_code, 200)
+        data_switch = json.loads(res_switch.data)
+        self.assertTrue(data_switch['success'])
+        self.assertEqual(data_switch['source'], 'browser_cam')
+        self.assertEqual(stream_mgr.source_mode, 'browser_cam')
+
+        # 2. Process synthetic webcam frame
+        test_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        _, buf = cv2.imencode('.jpg', test_frame)
+        res_frame = self.app.post(
+            '/process_frame',
+            data=buf.tobytes(),
+            content_type='image/jpeg'
+        )
+        self.assertEqual(res_frame.status_code, 200)
+        self.assertEqual(res_frame.content_type, 'image/jpeg')
+        self.assertIn('X-Metrics', res_frame.headers)
+
+        metrics_json = urllib.parse.unquote(res_frame.headers['X-Metrics'])
+        metrics = json.loads(metrics_json)
+        self.assertIn('reps', metrics)
+        self.assertIn('primary_angle', metrics)
+        self.assertIn('form_score', metrics)
+
+        # 3. Switch back to demo source cleanly
+        res_back = self.app.post('/set_source', json={'source': 'demo'})
+        self.assertEqual(res_back.status_code, 200)
+        self.assertEqual(stream_mgr.source_mode, 'demo')
+
+    def test_active_side_hysteresis(self):
+        tracker.set_exercise('squat')
+        # Simulate landmarks where right visibility is slightly higher
+        w, h = 640, 480
+        lms = [MockLandmark(0.5, 0.5) for _ in range(33)]
+        # Left knee = 25, Right knee = 26
+        lms[25].visibility = 0.85
+        lms[26].visibility = 0.86
+        tracker._process_squat(lms, w, h)
+        self.assertEqual(tracker.active_side, 'right')
+
+        # Left visibility becomes 0.88 (difference 0.02 < 0.15 margin -> stays right!)
+        lms[25].visibility = 0.88
+        lms[26].visibility = 0.86
+        tracker._process_squat(lms, w, h)
+        self.assertEqual(tracker.active_side, 'right')
+
+        # Left visibility jumps to 0.99 (difference 0.13 > threshold of right 0.70 -> switches to left!)
+        lms[25].visibility = 0.99
+        lms[26].visibility = 0.70
+        tracker._process_squat(lms, w, h)
+        self.assertEqual(tracker.active_side, 'left')
+
+    def test_squat_accurate_depth_scoring(self):
+        tracker.set_exercise('squat')
+        w, h = 640, 480
+        # Create landmarks for standing (180 deg)
+        lms = [MockLandmark(0.5, 0.5) for _ in range(33)]
+        # Right hip (24), right knee (26), right ankle (28)
+        lms[24] = MockLandmark(100 / w, 50 / h)
+        lms[26] = MockLandmark(100 / w, 100 / h)
+        lms[28] = MockLandmark(100 / w, 150 / h)
+        lms[23] = MockLandmark(90 / w, 50 / h)
+        lms[25] = MockLandmark(90 / w, 100 / h)
+        lms[27] = MockLandmark(90 / w, 150 / h)
+
+        # 1. Standing frames
+        for _ in range(5):
+            tracker._process_squat(lms, w, h)
+        self.assertEqual(tracker.stage, 'up')
+
+        # 2. Descending frames (knee angle ~ 90 deg)
+        lms[24] = MockLandmark(50 / w, 100 / h)
+        for _ in range(5):
+            tracker._process_squat(lms, w, h)
+        self.assertEqual(tracker.stage, 'down')
+        self.assertNotIn('shallow_depth', tracker.rep_score_deductions)
+
+        # 3. Rising back to standing frames (knee angle 180 deg)
+        lms[24] = MockLandmark(100 / w, 50 / h)
+        for _ in range(5):
+            tracker._process_squat(lms, w, h)
+        self.assertEqual(tracker.stage, 'up')
+        self.assertEqual(tracker.counter, 1)
+        # Because valid depth was achieved, score should be 100
+        self.assertEqual(tracker.form_score, 100)
+
+    def test_dumbbell_curl_repetition_cycle(self):
+        tracker.set_exercise('curl')
+        w, h = 640, 480
+        lms = [MockLandmark(0.5, 0.5) for _ in range(33)]
+        # Shoulder 12, Elbow 14, Wrist 16, Hip 24
+        # Fully extended arm (180 deg)
+        lms[12] = MockLandmark(100 / w, 100 / h)
+        lms[14] = MockLandmark(100 / w, 200 / h)
+        lms[16] = MockLandmark(100 / w, 300 / h)
+        lms[24] = MockLandmark(90 / w, 200 / h)
+        for _ in range(5):
+            tracker._process_curl(lms, w, h)
+        self.assertEqual(tracker.stage, 'down')
+
+        # Full contraction (<= 45 deg)
+        lms[16] = MockLandmark(100 / w, 120 / h)
+        for _ in range(5):
+            tracker._process_curl(lms, w, h)
+        self.assertEqual(tracker.stage, 'up')
+
+        # Return to full extension (>= 150 deg)
+        lms[16] = MockLandmark(100 / w, 300 / h)
+        for _ in range(5):
+            tracker._process_curl(lms, w, h)
+        self.assertEqual(tracker.stage, 'down')
+        self.assertEqual(tracker.counter, 1)
+        self.assertEqual(tracker.form_score, 100)
 
 
 if __name__ == '__main__':

@@ -41,6 +41,10 @@
 
       <!-- Canvas Overlay for Floating Rep Particles -->
       <canvas id="rep-particles-canvas" class="particles-canvas"></canvas>
+
+      <!-- Client Browser Webcam & Capture Elements (Hidden) -->
+      <video id="client-webcam" playsinline autoplay muted style="display:none;"></video>
+      <canvas id="capture-canvas" style="display:none;"></canvas>
     </div>
 
     <!-- Mode Selector Bar (Warm Yellow Buttons & Pills) -->
@@ -172,6 +176,16 @@
   let isCameraPaused = false;
   let selectedVoice = null;
   let lastAlertTimestamp = 0;
+
+  // Browser Webcam State
+  let currentInputSource = "demo";
+  let isCapturing = false;
+  let webcamStream = null;
+  let currentBlobUrl = null;
+  let isSendingFrame = false;
+  const clientWebcam = document.getElementById("client-webcam");
+  const captureCanvas = document.getElementById("capture-canvas");
+  const captureCtx = captureCanvas ? captureCanvas.getContext("2d") : null;
 
   // DOM Elements
   const repsEl = document.getElementById("reps-count");
@@ -436,17 +450,45 @@
       pauseIcon.textContent = "▶️";
       pauseText.textContent = "Resume Feed";
       await fetch("/pause_feed", { method: "POST" });
-      videoFeedImg.src = "";
+      if (currentInputSource !== "browser_cam") {
+        videoFeedImg.src = "";
+      }
     } else {
       pauseIcon.textContent = "⏸️";
       pauseText.textContent = "Pause Feed";
       await fetch("/resume_feed", { method: "POST" });
-      videoFeedImg.src = "/video_feed?t=" + Date.now();
+      if (currentInputSource === "browser_cam") {
+        if (!isCapturing && webcamStream) {
+          isCapturing = true;
+          runCameraCaptureLoop();
+        }
+      } else {
+        videoFeedImg.src = "/video_feed?t=" + Date.now();
+      }
     }
   });
 
-  window.addEventListener("pagehide", () => { navigator.sendBeacon("/pause_feed"); });
-  window.addEventListener("beforeunload", () => { navigator.sendBeacon("/pause_feed"); });
+  function stopBrowserWebcam() {
+    isCapturing = false;
+    if (webcamStream) {
+      webcamStream.getTracks().forEach(t => t.stop());
+      webcamStream = null;
+    }
+    if (clientWebcam) clientWebcam.srcObject = null;
+    if (currentBlobUrl) {
+      URL.revokeObjectURL(currentBlobUrl);
+      currentBlobUrl = null;
+    }
+  }
+
+  window.addEventListener("pagehide", () => {
+    stopBrowserWebcam();
+    navigator.sendBeacon("/pause_feed");
+  });
+  window.addEventListener("beforeunload", () => {
+    stopBrowserWebcam();
+    navigator.sendBeacon("/pause_feed");
+  });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") navigator.sendBeacon("/pause_feed");
   });
@@ -601,7 +643,9 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ exercise: ex })
     });
-    videoFeedImg.src = "/video_feed?t=" + Date.now();
+    if (currentInputSource !== "browser_cam" && !isCameraPaused) {
+      videoFeedImg.src = "/video_feed?t=" + Date.now();
+    }
   }
 
   modePills.forEach(pill => {
@@ -618,15 +662,152 @@
     switchExercise(exParam.toLowerCase());
   }
 
+  // Browser Camera Frame Capture Loop
+  function runCameraCaptureLoop() {
+    if (!isCapturing || currentInputSource !== "browser_cam" || isCameraPaused) return;
+
+    if (clientWebcam && clientWebcam.readyState >= 2 && captureCanvas && captureCtx) {
+      const vw = 640;
+      const vh = 480;
+      captureCanvas.width = vw;
+      captureCanvas.height = vh;
+
+      // Draw mirrored frame for natural selfie perspective
+      captureCtx.save();
+      captureCtx.translate(vw, 0);
+      captureCtx.scale(-1, 1);
+      captureCtx.drawImage(clientWebcam, 0, 0, vw, vh);
+      captureCtx.restore();
+
+      if (isSendingFrame) {
+        requestAnimationFrame(runCameraCaptureLoop);
+        return;
+      }
+
+      isSendingFrame = true;
+      captureCanvas.toBlob(async (blob) => {
+        if (!blob || !isCapturing || currentInputSource !== "browser_cam") {
+          isSendingFrame = false;
+          if (isCapturing && !isCameraPaused) requestAnimationFrame(runCameraCaptureLoop);
+          return;
+        }
+
+        try {
+          const res = await fetch("/process_frame", {
+            method: "POST",
+            body: blob,
+            headers: { "Content-Type": "image/jpeg" }
+          });
+
+          if (res.ok) {
+            const metricsHeader = res.headers.get("X-Metrics");
+            if (metricsHeader) {
+              try {
+                const metrics = JSON.parse(decodeURIComponent(metricsHeader));
+                updateTelemetry(metrics);
+              } catch (e) {}
+            }
+
+            const processedBlob = await res.blob();
+            const newUrl = URL.createObjectURL(processedBlob);
+            const oldUrl = currentBlobUrl;
+            currentBlobUrl = newUrl;
+            videoFeedImg.onload = () => {
+              if (oldUrl) URL.revokeObjectURL(oldUrl);
+            };
+            videoFeedImg.src = newUrl;
+          }
+        } catch (e) {
+          console.warn("Frame upload error:", e);
+        } finally {
+          isSendingFrame = false;
+        }
+
+        if (isCapturing && currentInputSource === "browser_cam" && !isCameraPaused) {
+          requestAnimationFrame(runCameraCaptureLoop);
+        }
+      }, "image/jpeg", 0.70);
+
+    } else {
+      requestAnimationFrame(runCameraCaptureLoop);
+    }
+  }
+
   // Source Selector handler
   sourceSelect.addEventListener("change", async (e) => {
-    const val = e.target.value;
-    await fetch("/set_source", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source: val })
-    });
-    videoFeedImg.src = "/video_feed?t=" + Date.now();
+    const selected = e.target.value;
+    currentInputSource = selected;
+
+    if (selected !== "browser_cam") {
+      stopBrowserWebcam();
+      const res = await fetch("/set_source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: selected })
+      });
+      const data = await res.json();
+      if (selected === "webcam" && data.source === "demo") {
+        alert("Physical webcam device 0 is unavailable. Falling back to demo video.");
+        sourceSelect.value = "demo";
+        currentInputSource = "demo";
+      }
+      if (!isCameraPaused) {
+        videoFeedImg.src = "/video_feed?t=" + Date.now();
+      }
+      return;
+    }
+
+    // Selected 'browser_cam'
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("Browser camera access requires HTTPS or localhost and a supported browser.");
+      sourceSelect.value = "demo";
+      currentInputSource = "demo";
+      return;
+    }
+
+    try {
+      feedbackMsg.textContent = "Requesting browser camera permission...";
+      if (hudFormStatus) hudFormStatus.textContent = "Requesting browser camera...";
+
+      webcamStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+        audio: false
+      });
+      clientWebcam.srcObject = webcamStream;
+      await clientWebcam.play();
+
+      await fetch("/set_source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "browser_cam" })
+      });
+
+      isCapturing = true;
+      runCameraCaptureLoop();
+    } catch (err) {
+      console.error("Camera access error:", err);
+      let errMsg = "Could not access browser camera.";
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        errMsg = "Camera permission was denied. Please allow camera access in browser site settings.";
+      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+        errMsg = "No camera hardware detected on this device.";
+      } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+        errMsg = "Camera is currently in use by another application.";
+      } else {
+        errMsg += " " + (err.message || err.name);
+      }
+      alert(errMsg);
+
+      sourceSelect.value = "demo";
+      currentInputSource = "demo";
+      stopBrowserWebcam();
+      await fetch("/set_source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "demo" })
+      });
+      videoFeedImg.src = "/video_feed?t=" + Date.now();
+    }
   });
 
   // Reset Reps Handler

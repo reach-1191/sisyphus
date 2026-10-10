@@ -6,7 +6,7 @@
 [![Flask](https://img.shields.io/badge/Flask-3.1.3-black.svg)](https://palletsprojects.com/p/flask/)
 [![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10.14-00A67E.svg)](https://developers.google.com/mediapipe)
 [![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED.svg?logo=docker&logoColor=white)](Dockerfile)
-[![Tests](https://img.shields.io/badge/Tests-22%20Passing-brightgreen.svg)](test_app.py)
+[![Tests](https://img.shields.io/badge/Tests-28%20Passing-brightgreen.svg)](test_app.py)
 [![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Site-blue.svg?logo=github)](https://reach-1191.github.io/sisyphus/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -18,6 +18,21 @@ Try it here: [Sisyphus Live App](https://suse-objectives-nuclear-longitude.trycl
 
 ## What's New in Recent Updates
 
+- ⚡ **Adaptive 1€ Filter (One Euro Filter) Motion Tracking**:
+  - Replaced rigid static filtering with adaptive velocity-aware 1€ filters (Casiez et al., 2012) on joint angles and 2D keypoints.
+  - Eradicates high-frequency spatial jitter during static holds (planks, squat pauses) while eliminating latency and phase lag on rapid explosive ascents.
+- 🎯 **Landmark Jitter Reduction & Confidence Weighting**:
+  - Independent 2D coordinate smoothing on all primary keypoints with visibility-based confidence weighting (`visibility >= 0.35`).
+  - Gracefully bridges momentary single-frame occlusions without dropping skeleton tracking or triggering false "no person detected" flickers.
+- 📐 **Active Side Kinematic Hysteresis**:
+  - Added visibility threshold hysteresis (`0.15` margin) to prevent rapid alternating between left and right limb tracking when facing the camera.
+- 🏋️ **Repetition Kinematic & Depth Precision**:
+  - Fixed premature shallow depth deductions: reaching valid depth ($\le 100^\circ$) confirms depth compliance and clears premature deductions.
+  - Optimized dumbbell curl peak contraction threshold ($\le 45^\circ$) for realistic biomechanical range of motion.
+- 🌐 **In-Browser Webcam Integration (WebRTC / `getUserMedia`)**:
+  - Fixed client-side browser webcam pipeline: captures local camera video stream via `navigator.mediaDevices.getUserMedia`, mirrors frames on a hidden canvas for intuitive selfie viewing, and posts frames to `/process_frame`.
+  - Server processes each webcam frame with MediaPipe pose estimation, draws crisp anti-aliased HUD skeleton overlays with active joint ring highlights, and streams annotated frames back to the client alongside dynamic `X-Metrics` telemetry headers.
+  - Safe lifecycle management: releases camera hardware tracks on mode changes, pauses, and page unloads.
 - 🐳 **Docker Containerization**: Full production-ready `Dockerfile` (Python 3.10-slim with OpenCV/FFmpeg system libraries) and `.dockerignore` for single-command builds and isolated deployment on any cloud or container platform.
 - 📊 **Post-Workout Form Analytics & Coach Summary (`/summary/<session_id>`)**:
   - **Dynamic 'Coach Insights' Feedback Card**: Prominent Bento card styled in dark charcoal (`#18181b`) with vibrant warm yellow accent borders (`#facc15`), providing ultra-concise, affirmative **Positive Encouragement** and actionable **Technical Improvement Tips** tailored per exercise (under 12 words per sentence, strictly prohibiting litotes or double negatives). Displays flawless precision guidance when session accuracy reaches or exceeds 90%.
@@ -35,7 +50,7 @@ Try it here: [Sisyphus Live App](https://suse-objectives-nuclear-longitude.trycl
 - 📹 **Optimized Headless Demo Fallbacks**:
   - High-definition fallback demo videos for all three supported exercises (`squat_demo.mp4`, `pushup_demo.mp4`, `dumbbell_demo.mp4`), enabling out-of-the-box testing without a webcam.
 - 🧪 **Comprehensive Automated Test Suite**:
-  - 22 automated unit and integration tests in `test_app.py` covering kinematics, EMA smoothing, auth flows, camera lifecycle, EXP/badges, audio alerts, and summary views.
+  - 28 automated unit and integration tests in `test_app.py` covering OneEuroFilter, LandmarkSmoother, browser webcam streaming, kinematics, auth flows, camera lifecycle, EXP/badges, audio alerts, and summary views.
 
 ---
 

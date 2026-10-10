@@ -327,6 +327,96 @@ def ema_filter(current_val, prev_val, alpha=0.35):
     return float(alpha * current_val + (1.0 - alpha) * prev_val)
 
 
+class OneEuroFilter:
+    """
+    1€ Filter (Casiez et al., CHI 2012)
+    Adaptive low-pass filter specifically designed for human motion tracking.
+    Eliminates high-frequency jitter when stationary while minimizing phase lag
+    during rapid explosive movement.
+    """
+    def __init__(self, min_cutoff=1.0, beta=0.01, d_cutoff=1.0):
+        self.min_cutoff = float(min_cutoff)
+        self.beta = float(beta)
+        self.d_cutoff = float(d_cutoff)
+        self.x_prev = None
+        self.dx_prev = 0.0
+        self.t_prev = None
+
+    def reset(self, val=None):
+        self.x_prev = float(val) if val is not None else None
+        self.dx_prev = 0.0
+        self.t_prev = None
+
+    def filter(self, x, t=None):
+        if x is None:
+            return self.x_prev
+        x = float(x)
+        if self.x_prev is None:
+            self.x_prev = x
+            self.t_prev = t
+            return x
+
+        if t is None or self.t_prev is None or t <= self.t_prev:
+            dt = 1.0 / 30.0
+        else:
+            dt = max(1.0 / 60.0, min(1.0 / 10.0, t - self.t_prev))
+        self.t_prev = t
+
+        # Filter the derivative (velocity)
+        dx = (x - self.x_prev) / dt
+        a_d = self._smoothing_factor(dt, self.d_cutoff)
+        dx_hat = a_d * dx + (1.0 - a_d) * self.dx_prev
+        self.dx_prev = dx_hat
+
+        # Adapt cutoff frequency based on velocity
+        cutoff = self.min_cutoff + self.beta * abs(dx_hat)
+        a = self._smoothing_factor(dt, cutoff)
+        x_hat = a * x + (1.0 - a) * self.x_prev
+        self.x_prev = x_hat
+        return float(x_hat)
+
+    @staticmethod
+    def _smoothing_factor(dt, cutoff):
+        r = 2.0 * math.pi * cutoff * dt
+        return r / (r + 1.0)
+
+
+class LandmarkSmoother:
+    """
+    Maintains independent OneEuroFilters for 2D keypoint coordinates (x, y)
+    with visibility-based confidence weighting to eradicate spatial landmark jitter.
+    """
+    def __init__(self, min_cutoff=1.2, beta=0.04, d_cutoff=1.0):
+        self.min_cutoff = min_cutoff
+        self.beta = beta
+        self.d_cutoff = d_cutoff
+        self.filters = {}
+
+    def reset(self):
+        self.filters.clear()
+
+    def smooth(self, landmarks, t=None):
+        if landmarks is None:
+            return None
+        smoothed = []
+        for i, lm in enumerate(landmarks):
+            vis = getattr(lm, 'visibility', 1.0)
+            if i not in self.filters:
+                self.filters[i] = (
+                    OneEuroFilter(self.min_cutoff, self.beta, self.d_cutoff),
+                    OneEuroFilter(self.min_cutoff, self.beta, self.d_cutoff)
+                )
+            fx, fy = self.filters[i]
+            if vis >= 0.35:
+                sx = fx.filter(lm.x, t)
+                sy = fy.filter(lm.y, t)
+            else:
+                sx = fx.filter(fx.x_prev if fx.x_prev is not None else lm.x, t)
+                sy = fy.filter(fy.x_prev if fy.x_prev is not None else lm.y, t)
+            smoothed.append(MockLandmark(sx, sy, vis))
+        return smoothed
+
+
 class MockLandmark:
     """Mock landmark wrapper for synthetic animation frames."""
     def __init__(self, x, y, visibility=1.0):
@@ -349,6 +439,13 @@ class ExerciseTracker:
         self.smoothed_primary_angle = 180.0
         self.smoothed_secondary_angle = 180.0
         self.smoothed_flare_angle = 0.0
+
+        # Adaptive Precision Filters
+        self.primary_filter = OneEuroFilter(min_cutoff=1.2, beta=0.015, d_cutoff=1.0)
+        self.secondary_filter = OneEuroFilter(min_cutoff=1.2, beta=0.015, d_cutoff=1.0)
+        self.flare_filter = OneEuroFilter(min_cutoff=1.0, beta=0.010, d_cutoff=1.0)
+        self.landmark_smoother = LandmarkSmoother(min_cutoff=1.2, beta=0.04, d_cutoff=1.0)
+        self.frames_without_pose = 0
 
         # Form Quality & Analytics
         self.form_score = 100
@@ -388,10 +485,11 @@ class ExerciseTracker:
 
     def set_exercise(self, ex):
         with self.lock:
-            if ex in ["squat", "pushup", "curl"] and ex != self.exercise:
+            if ex in ["squat", "pushup", "curl"]:
                 self.exercise = ex
                 self.counter = 0
                 self.stage = "down" if ex == "curl" else "up"
+                self.active_side = "right"
                 self.form_score = 100
                 self.form_scores_history.clear()
                 self.session_start_time = time.time()
@@ -401,6 +499,11 @@ class ExerciseTracker:
                 self.smoothed_primary_angle = 180.0
                 self.smoothed_secondary_angle = 180.0
                 self.smoothed_flare_angle = 0.0
+                self.primary_filter.reset(180.0)
+                self.secondary_filter.reset(180.0)
+                self.flare_filter.reset(0.0)
+                self.landmark_smoother.reset()
+                self.frames_without_pose = 0
                 self.min_angle_in_rep = 180.0
                 self.max_angle_in_rep = 180.0
                 self.warning_flags.clear()
@@ -416,12 +519,21 @@ class ExerciseTracker:
         with self.lock:
             self.counter = 0
             self.stage = "down" if self.exercise == "curl" else "up"
+            self.active_side = "right"
             self.form_score = 100
             self.form_scores_history.clear()
             self.session_start_time = time.time()
             self.total_pose_frames = 0
             self.warning_pose_frames = 0
             self.rep_score_deductions.clear()
+            self.smoothed_primary_angle = 180.0
+            self.smoothed_secondary_angle = 180.0
+            self.smoothed_flare_angle = 0.0
+            self.primary_filter.reset(180.0)
+            self.secondary_filter.reset(180.0)
+            self.flare_filter.reset(0.0)
+            self.landmark_smoother.reset()
+            self.frames_without_pose = 0
             self.min_angle_in_rep = 180.0
             self.max_angle_in_rep = 180.0
             self.warning_flags.clear()
@@ -465,21 +577,33 @@ class ExerciseTracker:
     def process_frame(self, frame, custom_landmarks=None, skip_pose=False):
         h, w, _ = frame.shape
         landmarks = custom_landmarks
+        now = time.time()
 
         if landmarks is None:
             if skip_pose and self.last_landmarks is not None:
-                # Frame skipping optimization: reuse cached pose tracking results
+                # Frame skipping: reuse cached pose tracking results
                 landmarks = self.last_landmarks
             else:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 result = self.landmarker.detect(mp_image)
                 if result.pose_landmarks and len(result.pose_landmarks) > 0:
-                    landmarks = result.pose_landmarks[0]
+                    raw_lms = result.pose_landmarks[0]
+                    # Apply OneEuroFilter spatial smoothing to landmarks
+                    landmarks = self.landmark_smoother.smooth(raw_lms, now)
                     self.last_landmarks = landmarks
+                    self.frames_without_pose = 0
                 else:
-                    landmarks = None
-                    self.last_landmarks = None
+                    self.frames_without_pose += 1
+                    # Gracefully bridge 1-2 missed frames without flickering
+                    if self.frames_without_pose <= 2 and self.last_landmarks is not None:
+                        landmarks = self.last_landmarks
+                    else:
+                        landmarks = None
+                        self.last_landmarks = None
+        else:
+            self.frames_without_pose = 0
+            self.last_landmarks = landmarks
 
         with self.lock:
             audio_ev = None
@@ -490,11 +614,11 @@ class ExerciseTracker:
                 self.total_pose_frames += 1
 
                 if self.exercise == "squat":
-                    audio_ev, vocal_msg = self._process_squat(landmarks, w, h)
+                    audio_ev, vocal_msg = self._process_squat(landmarks, w, h, now)
                 elif self.exercise == "pushup":
-                    audio_ev, vocal_msg = self._process_pushup(landmarks, w, h)
+                    audio_ev, vocal_msg = self._process_pushup(landmarks, w, h, now)
                 else:
-                    audio_ev, vocal_msg = self._process_curl(landmarks, w, h)
+                    audio_ev, vocal_msg = self._process_curl(landmarks, w, h, now)
 
                 if self.warning_flags or (audio_ev and audio_ev.startswith("warn_")):
                     self.warning_pose_frames += 1
@@ -505,7 +629,6 @@ class ExerciseTracker:
                 self.warning_flags = ["no_person"]
 
             # 4-second throttle check for backend alerts
-            now = time.time()
             if audio_ev and audio_ev.startswith("warn_") and vocal_msg:
                 if now - self.last_audio_trigger_time >= 4.0:
                     self.audio_event = audio_ev
@@ -524,7 +647,7 @@ class ExerciseTracker:
 
         return frame
 
-    def _process_squat(self, landmarks, w, h):
+    def _process_squat(self, landmarks, w, h, now=None):
         """
         Squat tracking:
         Speaks ONLY on specific form errors:
@@ -532,6 +655,8 @@ class ExerciseTracker:
           - Knee cave: 'Keep your knees out!'
         Silent on standard movement, descent, and rep counts.
         """
+        if now is None:
+            now = time.time()
         l_hip = [landmarks[23].x * w, landmarks[23].y * h]
         l_knee = [landmarks[25].x * w, landmarks[25].y * h]
         l_ankle = [landmarks[27].x * w, landmarks[27].y * h]
@@ -545,23 +670,26 @@ class ExerciseTracker:
 
         r_vis = getattr(landmarks[26], 'visibility', 1.0)
         l_vis = getattr(landmarks[25], 'visibility', 1.0)
-        if r_vis >= l_vis:
-            raw_knee_angle = r_ang
-            self.active_side = "right"
+        # Hysteresis on active side to prevent rapid flipping
+        if self.active_side == "right":
+            if l_vis > r_vis + 0.15:
+                self.active_side = "left"
         else:
-            raw_knee_angle = l_ang
-            self.active_side = "left"
+            if r_vis > l_vis + 0.15:
+                self.active_side = "right"
 
-        self.smoothed_primary_angle = ema_filter(raw_knee_angle, self.smoothed_primary_angle, alpha=0.35)
+        raw_knee_angle = r_ang if self.active_side == "right" else l_ang
+
+        self.smoothed_primary_angle = self.primary_filter.filter(raw_knee_angle, now)
         knee_angle = self.smoothed_primary_angle
 
-        # Knee Cave (Valgus) check
+        # Knee Cave (Valgus) check with frontal perspective validation
         knee_dist = abs(landmarks[25].x - landmarks[26].x)
         ankle_dist = abs(landmarks[27].x - landmarks[28].x)
         hip_dist = abs(landmarks[23].x - landmarks[24].x)
 
         knee_cave = False
-        if knee_angle < 140.0 and ankle_dist > 0.08:
+        if knee_angle < 140.0 and ankle_dist > 0.08 and hip_dist >= 0.08:
             if knee_dist < 0.72 * ankle_dist or knee_dist < 0.80 * hip_dist:
                 knee_cave = True
                 self.warning_flags.append("Knees caving inward! Push knees out.")
@@ -586,7 +714,8 @@ class ExerciseTracker:
 
             if knee_angle <= DOWN_THRESH:
                 self.feedback = "Good Depth! Now push up"
-            elif knee_angle > 115.0 and self.min_angle_in_rep > DOWN_THRESH:
+                self.rep_score_deductions.discard("shallow_depth")
+            elif knee_angle > self.min_angle_in_rep + 15.0 and self.min_angle_in_rep > DOWN_THRESH:
                 self.feedback = "Squat deeper! Knee angle must reach < 100°"
                 self.warning_flags.append("Shallow squat depth (< 100° required)")
                 self.rep_score_deductions.add("shallow_depth")
@@ -616,7 +745,6 @@ class ExerciseTracker:
                     critique = "Squat deeper next time." if "shallow_depth" in self.rep_score_deductions else "Keep knees out."
                     self.feedback = f"Rep #{self.counter} Complete ({rep_score}% Form) - {critique}"
 
-                # ZERO speech on rep completion
                 audio_ev = None
                 vocal_msg = None
 
@@ -631,7 +759,7 @@ class ExerciseTracker:
 
         return audio_ev, vocal_msg
 
-    def _process_pushup(self, landmarks, w, h):
+    def _process_pushup(self, landmarks, w, h, now=None):
         """
         Push-up tracking:
         Speaks ONLY on specific form errors:
@@ -639,6 +767,8 @@ class ExerciseTracker:
           - Chest depth fail: 'Lower your chest!'
         Silent on standard movement and rep counts.
         """
+        if now is None:
+            now = time.time()
         l_shoulder = [landmarks[11].x * w, landmarks[11].y * h]
         l_elbow = [landmarks[13].x * w, landmarks[13].y * h]
         l_wrist = [landmarks[15].x * w, landmarks[15].y * h]
@@ -654,20 +784,26 @@ class ExerciseTracker:
         l_vis = getattr(landmarks[13], 'visibility', 1.0)
         r_vis = getattr(landmarks[14], 'visibility', 1.0)
 
-        if r_vis >= l_vis:
+        # Hysteresis on active side
+        if self.active_side == "right":
+            if l_vis > r_vis + 0.15:
+                self.active_side = "left"
+        else:
+            if r_vis > l_vis + 0.15:
+                self.active_side = "right"
+
+        if self.active_side == "right":
             shoulder, elbow, wrist, hip, ankle = r_shoulder, r_elbow, r_wrist, r_hip, r_ankle
-            self.active_side = "right"
         else:
             shoulder, elbow, wrist, hip, ankle = l_shoulder, l_elbow, l_wrist, l_hip, l_ankle
-            self.active_side = "left"
 
         raw_elbow_angle = calculate_angle(shoulder, elbow, wrist)
         raw_spine_angle = calculate_angle(shoulder, hip, ankle)
         raw_flare_angle = calculate_elbow_flare(shoulder, hip, elbow)
 
-        self.smoothed_primary_angle = ema_filter(raw_elbow_angle, self.smoothed_primary_angle, alpha=0.35)
-        self.smoothed_secondary_angle = ema_filter(raw_spine_angle, self.smoothed_secondary_angle, alpha=0.35)
-        self.smoothed_flare_angle = ema_filter(raw_flare_angle, self.smoothed_flare_angle, alpha=0.35)
+        self.smoothed_primary_angle = self.primary_filter.filter(raw_elbow_angle, now)
+        self.smoothed_secondary_angle = self.secondary_filter.filter(raw_spine_angle, now)
+        self.smoothed_flare_angle = self.flare_filter.filter(raw_flare_angle, now)
 
         elbow_angle = self.smoothed_primary_angle
         spine_angle = self.smoothed_secondary_angle
@@ -705,7 +841,8 @@ class ExerciseTracker:
 
             if elbow_angle <= DOWN_THRESH:
                 self.feedback = "Great Depth! Now press up"
-            elif elbow_angle > 115.0 and self.min_angle_in_rep > DOWN_THRESH:
+                self.rep_score_deductions.discard("shallow_chest")
+            elif elbow_angle > self.min_angle_in_rep + 15.0 and self.min_angle_in_rep > DOWN_THRESH:
                 self.feedback = "Chest lower! Elbow angle must reach < 100°"
                 self.warning_flags.append("Insufficient chest depth (< 100° required)")
                 self.rep_score_deductions.add("shallow_chest")
@@ -737,7 +874,6 @@ class ExerciseTracker:
                     critique = "Raise hips next time." if "spine_sag" in self.rep_score_deductions else "Lower chest next time."
                     self.feedback = f"Rep #{self.counter} Complete ({rep_score}% Form) - {critique}"
 
-                # ZERO speech on rep completion
                 audio_ev = None
                 vocal_msg = None
 
@@ -752,14 +888,16 @@ class ExerciseTracker:
 
         return audio_ev, vocal_msg
 
-    def _process_curl(self, landmarks, w, h):
+    def _process_curl(self, landmarks, w, h, now=None):
         """
         Dumbbell Curls tracking:
         - Track arm angle (Shoulder-Elbow-Wrist).
-        - Increment rep count ONLY with strict hysteresis:
-          Moving from extension (>150 deg) to full curl (<40 deg), then returning to extension (>150 deg).
+        - Increment rep count with validated hysteresis:
+          Moving from extension (>150 deg) to full curl (<=45 deg), then returning to extension (>150 deg).
         - Form Error: If elbow moves excessively away from torso (>35 deg), speak 'Keep your elbows tucked!'.
         """
+        if now is None:
+            now = time.time()
         l_shoulder = [landmarks[11].x * w, landmarks[11].y * h]
         l_elbow = [landmarks[13].x * w, landmarks[13].y * h]
         l_wrist = [landmarks[15].x * w, landmarks[15].y * h]
@@ -773,19 +911,25 @@ class ExerciseTracker:
         l_vis = getattr(landmarks[13], 'visibility', 1.0)
         r_vis = getattr(landmarks[14], 'visibility', 1.0)
 
-        if r_vis >= l_vis:
+        # Hysteresis on active side
+        if self.active_side == "right":
+            if l_vis > r_vis + 0.15:
+                self.active_side = "left"
+        else:
+            if r_vis > l_vis + 0.15:
+                self.active_side = "right"
+
+        if self.active_side == "right":
             shoulder, elbow, wrist, hip = r_shoulder, r_elbow, r_wrist, r_hip
-            self.active_side = "right"
         else:
             shoulder, elbow, wrist, hip = l_shoulder, l_elbow, l_wrist, l_hip
-            self.active_side = "left"
 
         raw_arm_angle = calculate_angle(shoulder, elbow, wrist)
         raw_flare_angle = calculate_elbow_flare(shoulder, hip, elbow)
 
-        self.smoothed_primary_angle = ema_filter(raw_arm_angle, self.smoothed_primary_angle, alpha=0.35)
-        self.smoothed_flare_angle = ema_filter(raw_flare_angle, self.smoothed_flare_angle, alpha=0.35)
-        self.smoothed_secondary_angle = 40.0
+        self.smoothed_primary_angle = self.primary_filter.filter(raw_arm_angle, now)
+        self.smoothed_flare_angle = self.flare_filter.filter(raw_flare_angle, now)
+        self.smoothed_secondary_angle = 45.0
 
         arm_angle = self.smoothed_primary_angle
         flare_angle = self.smoothed_flare_angle
@@ -801,18 +945,18 @@ class ExerciseTracker:
         vocal_msg = None
 
         EXT_THRESH = 150.0
-        CURL_THRESH = 40.0
+        CURL_THRESH = 45.0
 
         if self.stage == "down":
             self.max_angle_in_rep = max(self.max_angle_in_rep, arm_angle)
 
-            # Reached full curl contraction (< 40 deg)
+            # Reached full curl contraction (<= 45 deg)
             if arm_angle <= CURL_THRESH:
                 self.stage = "up"
                 self.min_angle_in_rep = arm_angle
-                self.feedback = "Peak Curl Reached (<40°)! Now lower slowly"
+                self.feedback = "Peak Curl Reached! Now lower slowly"
             elif arm_angle < 90.0:
-                self.feedback = "Curling up... Target < 40°"
+                self.feedback = "Curling up... Target < 45°"
             else:
                 self.feedback = "Arm extended (>150°). Begin curl"
 
@@ -856,24 +1000,35 @@ class ExerciseTracker:
         return audio_ev, vocal_msg
 
     def _draw_skeleton(self, frame, landmarks, w, h):
-        """Minimal keypoint skeleton overlay with thinner lines and clean joint highlights."""
+        """Crisp anti-aliased keypoint skeleton overlay with active joint highlights."""
         connections = [
             (11, 12), (11, 23), (12, 24), (23, 24),
             (11, 13), (13, 15), (12, 14), (14, 16),
             (23, 25), (25, 27), (24, 26), (26, 28)
         ]
-        color = (0, 255, 198) if not self.warning_flags else (0, 165, 255)
+        color = (21, 204, 250) if not self.warning_flags else (0, 140, 255)
         for p1, p2 in connections:
             if p1 < len(landmarks) and p2 < len(landmarks):
                 pt1 = (int(landmarks[p1].x * w), int(landmarks[p1].y * h))
                 pt2 = (int(landmarks[p2].x * w), int(landmarks[p2].y * h))
-                cv2.line(frame, pt1, pt2, color, 1, cv2.LINE_AA)
+                cv2.line(frame, pt1, pt2, color, 2, cv2.LINE_AA)
 
         for idx in [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]:
             if idx < len(landmarks):
                 pt = (int(landmarks[idx].x * w), int(landmarks[idx].y * h))
-                cv2.circle(frame, pt, 3, (255, 255, 255), -1, cv2.LINE_AA)
-                cv2.circle(frame, pt, 5, color, 1, cv2.LINE_AA)
+                cv2.circle(frame, pt, 4, (255, 255, 255), -1, cv2.LINE_AA)
+                cv2.circle(frame, pt, 6, color, 1, cv2.LINE_AA)
+
+        # Highlight key tracked active joint
+        active_joint_idx = None
+        if self.exercise == "squat":
+            active_joint_idx = 26 if self.active_side == "right" else 25
+        elif self.exercise in ["pushup", "curl"]:
+            active_joint_idx = 14 if self.active_side == "right" else 13
+
+        if active_joint_idx is not None and active_joint_idx < len(landmarks):
+            apt = (int(landmarks[active_joint_idx].x * w), int(landmarks[active_joint_idx].y * h))
+            cv2.circle(frame, apt, 10, color, 2, cv2.LINE_AA)
 
     def _draw_hud(self, frame):
         """
@@ -1117,16 +1272,16 @@ class VideoStreamManager:
             if w != 480 or h != 360:
                 frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_AREA)
 
-            # Performance Optimization: Process pose tracking every 2nd frame (frame skipping) to maintain smooth 30+ FPS stream playback
-            skip_pose = (self.frame_count % 2 != 0)
+            # Skip pose only on video file decode when custom landmarks are not provided
+            skip_pose = (self.frame_count % 2 != 0) if custom_landmarks is None else False
             processed = self.tracker.process_frame(
                 frame,
                 custom_landmarks=custom_landmarks,
                 skip_pose=skip_pose
             )
 
-            # Bandwidth Optimization: Set JPEG encoding compression parameter to quality 65
-            ret, buf = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 65])
+            # Bandwidth Optimization: JPEG quality 75
+            ret, buf = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 75])
             if ret:
                 with self.lock:
                     self.latest_frame_bytes = buf.tobytes()
@@ -3260,15 +3415,17 @@ def process_frame():
         if w != 480 or h != 360:
             frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_AREA)
 
-        # Performance Optimization: Process pose tracking every 2nd frame (frame skipping)
         stream_mgr.frame_count += 1
-        skip_pose = (stream_mgr.frame_count % 2 != 0)
-        processed = tracker.process_frame(frame, skip_pose=skip_pose)
+        # For browser camera, process every frame smoothly without skipping
+        processed = tracker.process_frame(frame, skip_pose=False)
 
-        # Bandwidth Optimization: Set JPEG encoding compression to quality 65
-        ret, buf = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 65])
+        # High-Fidelity Bandwidth Optimization: JPEG quality 75
+        ret, buf = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 75])
         if not ret:
             return jsonify({"error": "Failed to encode frame"}), 500
+
+        with stream_mgr.lock:
+            stream_mgr.latest_frame_bytes = buf.tobytes()
 
         metrics = tracker.get_status()
         metrics_json = json.dumps(metrics)
