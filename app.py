@@ -1131,6 +1131,7 @@ class VideoStreamManager:
         self.source_mode = "demo"  # "demo", "webcam", or "browser_cam"
         self.latest_frame_bytes = None
         self.lock = threading.RLock()
+        self.condition = threading.Condition(self.lock)
         self.running = True
         self.synthetic_engine = SyntheticDemoEngine(640, 480)
         self.synthetic_time = 0.0
@@ -1186,15 +1187,16 @@ class VideoStreamManager:
 
     def add_viewer(self):
         """Track active stream viewer and start camera if needed."""
-        with self.lock:
+        with self.condition:
             self.active_viewers += 1
             self.is_paused = False
             if self.cap is None and self.source_mode in ["demo", "webcam"]:
                 self._open_source()
+            self.condition.notify_all()
 
     def remove_viewer(self):
         """Untrack viewer; automatically release camera when no clients are viewing."""
-        with self.lock:
+        with self.condition:
             self.active_viewers = max(0, self.active_viewers - 1)
             if self.active_viewers == 0:
                 if self.cap is not None:
@@ -1204,21 +1206,25 @@ class VideoStreamManager:
                         pass
                     self.cap = None
                     print("[+] All stream clients disconnected. Camera VideoCapture released.")
+            self.condition.notify_all()
 
     def pause(self):
         """Pause stream and release camera."""
-        self.is_paused = True
+        with self.condition:
+            self.is_paused = True
+            self.condition.notify_all()
         self.release_camera()
 
     def resume(self):
         """Resume stream and re-open video source."""
-        with self.lock:
+        with self.condition:
             self.is_paused = False
             if self.active_viewers > 0 and self.cap is None:
                 self._open_source()
+            self.condition.notify_all()
 
     def set_source(self, mode):
-        with self.lock:
+        with self.condition:
             self.source_mode = mode
             if self.active_viewers > 0 and not self.is_paused:
                 self._open_source()
@@ -1227,11 +1233,13 @@ class VideoStreamManager:
                     self.cap.release()
                     self.cap = None
             self.tracker.reset_reps()
+            self.condition.notify_all()
 
     def update_demo_for_exercise(self):
-        with self.lock:
+        with self.condition:
             if self.source_mode == "demo" and self.active_viewers > 0 and not self.is_paused:
                 self._open_source()
+            self.condition.notify_all()
 
     def _capture_loop(self):
         target_fps = 30.0
@@ -1267,10 +1275,10 @@ class VideoStreamManager:
                         self.tracker.exercise, self.synthetic_time
                     )
 
-            # Performance Optimization: Resize incoming frame to 480x360 before MediaPipe processing to reduce CPU/GPU load
+            # Performance Optimization: Resize incoming frame to 480x360 with fast SIMD INTER_LINEAR
             h, w = frame.shape[:2]
             if w != 480 or h != 360:
-                frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_AREA)
+                frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_LINEAR)
 
             # Skip pose only on video file decode when custom landmarks are not provided
             skip_pose = (self.frame_count % 2 != 0) if custom_landmarks is None else False
@@ -1283,27 +1291,31 @@ class VideoStreamManager:
             # Bandwidth Optimization: JPEG quality 75
             ret, buf = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 75])
             if ret:
-                with self.lock:
+                with self.condition:
                     self.latest_frame_bytes = buf.tobytes()
+                    self.condition.notify_all()
 
             elapsed = time.time() - start_t
             if elapsed < frame_interval:
                 time.sleep(frame_interval - elapsed)
 
     def generate_frames(self):
-        """Yield multipart JPEG frames and properly release camera resource when disconnected."""
+        """Yield multipart JPEG frames with event-driven Condition notifications."""
         self.add_viewer()
         last_yielded = None
         try:
             while self.running and not self.is_paused:
-                with self.lock:
+                with self.condition:
+                    while self.running and not self.is_paused and (self.latest_frame_bytes is None or self.latest_frame_bytes == last_yielded):
+                        self.condition.wait(timeout=0.04)
+                    if not self.running or self.is_paused:
+                        break
                     f_bytes = self.latest_frame_bytes
 
                 if f_bytes and f_bytes != last_yielded:
                     last_yielded = f_bytes
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + f_bytes + b'\r\n')
-                time.sleep(0.02)
         finally:
             self.remove_viewer()
 
@@ -3328,10 +3340,12 @@ def summary(session_id):
 @app.route('/video_feed')
 def video_feed():
     """Video feed endpoint streaming multipart JPEG."""
-    return Response(
+    resp = Response(
         generate_frames(),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return resp
 
 
 @app.route('/pause_feed', methods=['POST', 'GET'])
@@ -3351,10 +3365,12 @@ def resume_feed():
 @app.route('/api/audio_alert')
 def api_audio_alert():
     """Lightweight endpoint for throttled form warning vocal cues."""
-    return jsonify({
+    resp = jsonify({
         "alert": tracker.latest_audio_alert,
         "timestamp": tracker.latest_alert_time
     })
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return resp
 
 
 @app.route('/status')
@@ -3363,7 +3379,9 @@ def status():
     data = tracker.get_status()
     data['source'] = stream_mgr.source_mode
     data['is_paused'] = stream_mgr.is_paused
-    return jsonify(data)
+    resp = jsonify(data)
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return resp
 
 
 @app.route('/set_exercise', methods=['POST'])
@@ -3410,10 +3428,10 @@ def process_frame():
         if frame is None:
             return jsonify({"error": "Failed to decode frame"}), 400
 
-        # Performance Optimization: Resize incoming frame to 480x360 before MediaPipe processing to reduce CPU/GPU load
+        # Performance Optimization: Resize incoming frame to 480x360 with fast SIMD INTER_LINEAR
         h, w = frame.shape[:2]
         if w != 480 or h != 360:
-            frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_AREA)
+            frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_LINEAR)
 
         stream_mgr.frame_count += 1
         # For browser camera, process every frame smoothly without skipping
@@ -3424,8 +3442,9 @@ def process_frame():
         if not ret:
             return jsonify({"error": "Failed to encode frame"}), 500
 
-        with stream_mgr.lock:
+        with stream_mgr.condition:
             stream_mgr.latest_frame_bytes = buf.tobytes()
+            stream_mgr.condition.notify_all()
 
         metrics = tracker.get_status()
         metrics_json = json.dumps(metrics)
@@ -3433,6 +3452,7 @@ def process_frame():
         resp = Response(buf.tobytes(), mimetype='image/jpeg')
         resp.headers['X-Metrics'] = urllib.parse.quote(metrics_json)
         resp.headers['Access-Control-Expose-Headers'] = 'X-Metrics'
+        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
         return resp
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -233,15 +233,58 @@
   const particlesCanvas = document.getElementById("rep-particles-canvas");
   const pCtx = particlesCanvas ? particlesCanvas.getContext("2d") : null;
   let particles = [];
+  let particleAnimationId = null;
 
   function resizeParticlesCanvas() {
     if (particlesCanvas && particlesCanvas.parentElement) {
-      particlesCanvas.width = particlesCanvas.parentElement.clientWidth;
-      particlesCanvas.height = particlesCanvas.parentElement.clientHeight;
+      const pw = particlesCanvas.parentElement.clientWidth;
+      const ph = particlesCanvas.parentElement.clientHeight;
+      if (particlesCanvas.width !== pw || particlesCanvas.height !== ph) {
+        particlesCanvas.width = pw;
+        particlesCanvas.height = ph;
+      }
     }
   }
-  window.addEventListener("resize", resizeParticlesCanvas);
+  window.addEventListener("resize", resizeParticlesCanvas, { passive: true });
   resizeParticlesCanvas();
+
+  function renderParticles() {
+    if (!particlesCanvas || !pCtx) {
+      particleAnimationId = null;
+      return;
+    }
+    pCtx.clearRect(0, 0, particlesCanvas.width, particlesCanvas.height);
+    if (particles.length === 0) {
+      particleAnimationId = null;
+      return;
+    }
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.12; // subtle gravity
+      p.alpha -= p.decay;
+      if (p.alpha <= 0) {
+        particles.splice(i, 1);
+        continue;
+      }
+      pCtx.save();
+      pCtx.globalAlpha = p.alpha;
+      pCtx.fillStyle = p.color;
+      pCtx.shadowBlur = 8;
+      pCtx.shadowColor = p.color;
+      pCtx.beginPath();
+      pCtx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      pCtx.fill();
+      pCtx.restore();
+    }
+    if (particles.length > 0) {
+      particleAnimationId = requestAnimationFrame(renderParticles);
+    } else {
+      pCtx.clearRect(0, 0, particlesCanvas.width, particlesCanvas.height);
+      particleAnimationId = null;
+    }
+  }
 
   // Particle burst animation on rep increment
   function triggerRepParticleBurst() {
@@ -266,34 +309,10 @@
         decay: Math.random() * 0.03 + 0.02
       });
     }
-  }
-
-  function renderParticles() {
-    if (!particlesCanvas || !pCtx) return;
-    pCtx.clearRect(0, 0, particlesCanvas.width, particlesCanvas.height);
-    for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i];
-      p.x += p.vx;
-      p.y += p.vy;
-      p.vy += 0.12; // subtle gravity
-      p.alpha -= p.decay;
-      if (p.alpha <= 0) {
-        particles.splice(i, 1);
-        continue;
-      }
-      pCtx.save();
-      pCtx.globalAlpha = p.alpha;
-      pCtx.fillStyle = p.color;
-      pCtx.shadowBlur = 8;
-      pCtx.shadowColor = p.color;
-      pCtx.beginPath();
-      pCtx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-      pCtx.fill();
-      pCtx.restore();
+    if (!particleAnimationId) {
+      particleAnimationId = requestAnimationFrame(renderParticles);
     }
-    requestAnimationFrame(renderParticles);
   }
-  requestAnimationFrame(renderParticles);
 
   function formatTime(totalSec) {
     const s = Math.floor(totalSec || 0);
@@ -421,7 +440,7 @@
       }
     } catch (e) {}
   }
-  setInterval(pollAudioAlert, 500);
+  setInterval(pollAudioAlert, 1000);
 
   if (workoutSaveForm) {
     workoutSaveForm.addEventListener("submit", () => {
@@ -493,14 +512,31 @@
     if (document.visibilityState === "hidden") navigator.sendBeacon("/pause_feed");
   });
 
+  // High-performance DOM diffing helpers (eliminate unnecessary style recalc and reflow)
+  function updateText(el, text) {
+    if (el && el.textContent !== text) {
+      el.textContent = text;
+    }
+  }
+  function updateClass(el, className) {
+    if (el && el.className !== className) {
+      el.className = className;
+    }
+  }
+  function updateStyle(el, prop, val) {
+    if (el && el.style[prop] !== val) {
+      el.style[prop] = val;
+    }
+  }
+
   // Telemetry update handler
   function updateTelemetry(data) {
     if (!data) return;
 
     if (lastRepCount === null) {
       lastRepCount = data.reps;
-      repsEl.textContent = data.reps;
-      if (hudRepCount) hudRepCount.textContent = data.reps;
+      updateText(repsEl, String(data.reps));
+      updateText(hudRepCount, String(data.reps));
     } else if (data.reps !== lastRepCount) {
       if (data.reps > lastRepCount) {
         playRepChime();
@@ -508,33 +544,31 @@
         triggerRepParticleBurst();
 
         if (hudRepPillContainer) {
-          hudRepPillContainer.classList.add("rep-counter-glow");
-          hudRepPillContainer.classList.add("rep-pulse");
+          hudRepPillContainer.classList.add("rep-counter-glow", "rep-pulse");
         }
         if (mainRepBox) {
           mainRepBox.classList.add("rep-box-glow");
         }
-        repsEl.classList.add("rep-pulse");
+        if (repsEl) repsEl.classList.add("rep-pulse");
 
         setTimeout(() => {
           if (hudRepPillContainer) {
-            hudRepPillContainer.classList.remove("rep-counter-glow");
-            hudRepPillContainer.classList.remove("rep-pulse");
+            hudRepPillContainer.classList.remove("rep-counter-glow", "rep-pulse");
           }
           if (mainRepBox) {
             mainRepBox.classList.remove("rep-box-glow");
           }
-          repsEl.classList.remove("rep-pulse");
+          if (repsEl) repsEl.classList.remove("rep-pulse");
         }, 450);
       }
       lastRepCount = data.reps;
-      repsEl.textContent = data.reps;
-      if (hudRepCount) hudRepCount.textContent = data.reps;
+      updateText(repsEl, String(data.reps));
+      updateText(hudRepCount, String(data.reps));
     }
 
     if (data.duration_seconds !== undefined) {
       currentDuration = data.duration_seconds;
-      sessionTimerEl.textContent = formatTime(data.duration_seconds);
+      updateText(sessionTimerEl, formatTime(data.duration_seconds));
     }
     if (data.avg_form_accuracy !== undefined) {
       currentAccuracy = data.avg_form_accuracy;
@@ -543,78 +577,86 @@
     }
 
     const isDown = data.stage === "down";
-    phaseBadgeEl.textContent = isDown ? "DOWN" : "UP";
-    phaseBadgeEl.className = isDown ? "pill-tag pill-yellow" : "pill-tag pill-gray";
+    const phaseText = isDown ? "DOWN" : "UP";
+    updateText(phaseBadgeEl, phaseText);
+    updateClass(phaseBadgeEl, isDown ? "pill-tag pill-yellow" : "pill-tag pill-gray");
     if (hudStagePill) {
-      hudStagePill.textContent = isDown ? "DOWN" : "UP";
-      hudStagePill.style.color = isDown ? "#facc15" : "#9ca3af";
-      hudStagePill.style.background = isDown ? "rgba(250, 204, 21, 0.22)" : "rgba(255, 255, 255, 0.08)";
+      updateText(hudStagePill, phaseText);
+      updateStyle(hudStagePill, "color", isDown ? "#facc15" : "#9ca3af");
+      updateStyle(hudStagePill, "background", isDown ? "rgba(250, 204, 21, 0.22)" : "rgba(255, 255, 255, 0.08)");
     }
 
     let exerciseDisplayName = "Squats";
+    const pAngleRound = Math.round(data.primary_angle) + "°";
     if (data.exercise === "squat") {
       exerciseDisplayName = "Squats";
-      primaryAngleLabel.textContent = "Knee Angle";
-      primaryAngleVal.textContent = Math.round(data.primary_angle) + "°";
-      secondaryAngleLabel.textContent = "Target Depth";
-      secondaryAngleVal.textContent = "≤ 100°";
-      activeSideText.textContent = `Active: ${data.active_side === 'right' ? 'Right Leg' : 'Left Leg'}`;
-      if (hudAnglePill) hudAnglePill.textContent = Math.round(data.primary_angle) + "°";
+      updateText(primaryAngleLabel, "Knee Angle");
+      updateText(primaryAngleVal, pAngleRound);
+      updateText(secondaryAngleLabel, "Target Depth");
+      updateText(secondaryAngleVal, "≤ 100°");
+      updateText(activeSideText, `Active: ${data.active_side === 'right' ? 'Right Leg' : 'Left Leg'}`);
     } else if (data.exercise === "pushup") {
       exerciseDisplayName = "Push-ups";
-      primaryAngleLabel.textContent = "Elbow Angle";
-      primaryAngleVal.textContent = Math.round(data.primary_angle) + "°";
-      secondaryAngleLabel.textContent = "Spine Angle";
-      secondaryAngleVal.textContent = Math.round(data.secondary_angle) + "°";
-      activeSideText.textContent = `Flare: ${Math.round(data.flare_angle)}° (≤ 75°)`;
-      if (hudAnglePill) hudAnglePill.textContent = Math.round(data.primary_angle) + "°";
+      updateText(primaryAngleLabel, "Elbow Angle");
+      updateText(primaryAngleVal, pAngleRound);
+      updateText(secondaryAngleLabel, "Spine Angle");
+      updateText(secondaryAngleVal, Math.round(data.secondary_angle) + "°");
+      updateText(activeSideText, `Flare: ${Math.round(data.flare_angle)}° (≤ 75°)`);
     } else {
       exerciseDisplayName = "Dumbbell Curls";
-      primaryAngleLabel.textContent = "Arm Angle";
-      primaryAngleVal.textContent = Math.round(data.primary_angle) + "°";
-      secondaryAngleLabel.textContent = "Curl Range";
-      secondaryAngleVal.textContent = "< 40° / > 150°";
-      activeSideText.textContent = `Active: ${data.active_side === 'right' ? 'Right Arm' : 'Left Arm'}`;
-      if (hudAnglePill) hudAnglePill.textContent = Math.round(data.primary_angle) + "°";
+      updateText(primaryAngleLabel, "Arm Angle");
+      updateText(primaryAngleVal, pAngleRound);
+      updateText(secondaryAngleLabel, "Curl Range");
+      updateText(secondaryAngleVal, "< 40° / > 150°");
+      updateText(activeSideText, `Active: ${data.active_side === 'right' ? 'Right Arm' : 'Left Arm'}`);
     }
-    if (hudExerciseMode) hudExerciseMode.textContent = exerciseDisplayName;
+    updateText(hudAnglePill, pAngleRound);
+    updateText(hudExerciseMode, exerciseDisplayName);
 
     const score = Math.max(0, Math.min(100, data.form_score));
-    scoreValEl.textContent = score + "%";
-    scoreBarEl.style.width = score + "%";
-    if (hudScorePill) hudScorePill.textContent = score + "%";
+    const scoreStr = score + "%";
+    updateText(scoreValEl, scoreStr);
+    updateStyle(scoreBarEl, "width", scoreStr);
+    updateText(hudScorePill, scoreStr);
 
-    feedbackMsg.textContent = data.feedback;
-    if (hudFormStatus) hudFormStatus.textContent = data.feedback;
+    updateText(feedbackMsg, data.feedback);
+    updateText(hudFormStatus, data.feedback);
 
     const hasWarnings = data.warnings && data.warnings.length > 0;
     if (hasWarnings) {
-      feedbackBanner.style.background = "rgba(239, 68, 68, 0.1)";
-      feedbackBanner.style.borderColor = "rgba(239, 68, 68, 0.3)";
-      feedbackAvatar.style.background = "var(--accent-red)";
-      feedbackAvatar.style.color = "#ffffff";
-      if (hudStatusIcon) hudStatusIcon.textContent = "⚠️";
-      if (hudFormStatus) hudFormStatus.style.color = "#f87171";
+      updateStyle(feedbackBanner, "background", "rgba(239, 68, 68, 0.1)");
+      updateStyle(feedbackBanner, "borderColor", "rgba(239, 68, 68, 0.3)");
+      updateStyle(feedbackAvatar, "background", "var(--accent-red)");
+      updateStyle(feedbackAvatar, "color", "#ffffff");
+      updateText(hudStatusIcon, "⚠️");
+      updateStyle(hudFormStatus, "color", "#f87171");
       if (hudScorePill) {
-        hudScorePill.style.color = "#f87171";
-        hudScorePill.style.background = "rgba(239, 68, 68, 0.18)";
+        updateStyle(hudScorePill, "color", "#f87171");
+        updateStyle(hudScorePill, "background", "rgba(239, 68, 68, 0.18)");
       }
     } else {
-      feedbackBanner.style.background = "rgba(250, 204, 21, 0.12)";
-      feedbackBanner.style.borderColor = "rgba(250, 204, 21, 0.4)";
-      feedbackAvatar.style.background = "#facc15";
-      feedbackAvatar.style.color = "#18181b";
-      if (hudStatusIcon) hudStatusIcon.textContent = "⚡";
-      if (hudFormStatus) hudFormStatus.style.color = "#ffffff";
+      updateStyle(feedbackBanner, "background", "rgba(250, 204, 21, 0.12)");
+      updateStyle(feedbackBanner, "borderColor", "rgba(250, 204, 21, 0.4)");
+      updateStyle(feedbackAvatar, "background", "#facc15");
+      updateStyle(feedbackAvatar, "color", "#18181b");
+      updateText(hudStatusIcon, "⚡");
+      updateStyle(hudFormStatus, "color", "#ffffff");
       if (hudScorePill) {
-        hudScorePill.style.color = "#facc15";
-        hudScorePill.style.background = "rgba(250, 204, 21, 0.18)";
+        updateStyle(hudScorePill, "color", "#facc15");
+        updateStyle(hudScorePill, "background", "rgba(250, 204, 21, 0.18)");
       }
+    }
+
+    if (data.vocal_message) {
+      speakFormError(data.vocal_message);
     }
   }
 
-  // Poll /status endpoint
+  // Poll /status endpoint (paused when browser_cam is active since X-Metrics provides live telemetry)
   async function pollStatus() {
+    if (currentInputSource === "browser_cam" && isCapturing && !isCameraPaused) {
+      return;
+    }
     try {
       const res = await fetch("/status");
       if (res.ok) {
@@ -623,7 +665,7 @@
       }
     } catch (e) {}
   }
-  setInterval(pollStatus, 150);
+  setInterval(pollStatus, 200);
 
   // Exercise Mode Switcher Pill logic
   async function switchExercise(ex) {
@@ -669,8 +711,8 @@
     if (clientWebcam && clientWebcam.readyState >= 2 && captureCanvas && captureCtx) {
       const vw = 640;
       const vh = 480;
-      captureCanvas.width = vw;
-      captureCanvas.height = vh;
+      if (captureCanvas.width !== vw) captureCanvas.width = vw;
+      if (captureCanvas.height !== vh) captureCanvas.height = vh;
 
       // Draw mirrored frame for natural selfie perspective
       captureCtx.save();
