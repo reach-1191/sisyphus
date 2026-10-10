@@ -1,11 +1,14 @@
+import os
 import cv2
-import mediapipe as mp
 import numpy as np
-from datetime import datetime
-from flask import Flask, render_template_string, Response, request, redirect, url_for
+from datetime import datetime, timezone
+from flask import Flask, render_template_string, Response, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
+
+import mediapipe as mp
+from mediapipe.tasks.python import vision, BaseOptions
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'whithack-sisyphus-secret-key'
@@ -17,24 +20,41 @@ login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
 class User(UserMixin, db.Model):
+    __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     sessions = db.relationship('ExerciseSession', backref='user', lazy=True)
 
 class ExerciseSession(db.Model):
+    __tablename__ = 'exercise_sessions'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     exercise_type = db.Column(db.String(50), nullable=False)
     rep_count = db.Column(db.Integer, nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
-mp_pose = mp.solutions.pose
-pose = mp.pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+# Initialize MediaPipe Pose Tasks Landmarker
+MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pose_landmarker_lite.task')
+if not os.path.exists(MODEL_PATH):
+    import urllib.request
+    urllib.request.urlretrieve(
+        'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task',
+        MODEL_PATH
+    )
+
+options = vision.PoseLandmarkerOptions(
+    base_options=BaseOptions(model_asset_path=MODEL_PATH),
+    running_mode=vision.RunningMode.IMAGE,
+    num_poses=1,
+    min_pose_detection_confidence=0.5,
+    min_tracking_confidence=0.5,
+)
+landmarker = vision.PoseLandmarker.create_from_options(options)
 
 def calculate_angle(a, b, c):
     a, b, c = np.array(a), np.array(b), np.array(c)
@@ -43,40 +63,67 @@ def calculate_angle(a, b, c):
     return 360.0 - angle if angle > 180.0 else angle
 
 global_reps = 0
-global_stage = None
+global_stage = "up"
 
 def generate_frames():
     global global_reps, global_stage
+    demo_video = 'squat_demo.mp4'
     cap = cv2.VideoCapture(0)
+    if not cap.isOpened() and os.path.exists(demo_video):
+        cap = cv2.VideoCapture(demo_video)
+
     while True:
         success, frame = cap.read()
         if not success:
-            frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(frame, "Webcam / Demo Feed Active", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 198), 2)
-        else:
-            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose.process(image)
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            if os.path.exists(demo_video):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                success, frame = cap.read()
+            if not success or frame is None:
+                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(frame, "Webcam / Demo Feed Active", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 198), 2)
+                ret, buffer = cv2.imencode('.jpg', frame)
+                yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                continue
 
-            try:
-                landmarks = results.pose_landmarks.landmark
-                hip = [landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x, landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y]
-                knee = [landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].x, landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].y]
-                ankle = [landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].x, landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value].y]
+        h, w, _ = frame.shape
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        
+        try:
+            results = landmarker.detect(mp_image)
+            if results.pose_landmarks and len(results.pose_landmarks) > 0:
+                landmarks = results.pose_landmarks[0]
+                hip = [landmarks[23].x * w, landmarks[23].y * h]
+                knee = [landmarks[25].x * w, landmarks[25].y * h]
+                ankle = [landmarks[27].x * w, landmarks[27].y * h]
 
                 angle = calculate_angle(hip, knee, ankle)
                 if angle > 160:
                     global_stage = "up"
-                if angle < 90 and global_stage == 'up':
+                if angle < 100 and global_stage == 'up':
                     global_stage = "down"
                     global_reps += 1
 
-            except Exception:
-                pass
+                pts = [
+                    (int(hip[0]), int(hip[1])),
+                    (int(knee[0]), int(knee[1])),
+                    (int(ankle[0]), int(ankle[1]))
+                ]
+                cv2.line(frame, pts[0], pts[1], (0, 255, 198), 3, cv2.LINE_AA)
+                cv2.line(frame, pts[1], pts[2], (0, 255, 198), 3, cv2.LINE_AA)
+                for pt in pts:
+                    cv2.circle(frame, pt, 6, (255, 255, 255), -1, cv2.LINE_AA)
+                    cv2.circle(frame, pt, 8, (0, 255, 198), 2, cv2.LINE_AA)
 
-            cv2.putText(image, f'REPS: {global_reps}', (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 198), 3)
+                cv2.putText(frame, f"KNEE: {int(angle)} deg", (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+        except Exception:
+            pass
 
-        ret, buffer = cv2.imencode('.jpg', frame if not success else image)
+        cv2.putText(frame, f'REPS: {global_reps}', (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 255, 198), 3, cv2.LINE_AA)
+        stage_color = (0, 255, 198) if global_stage == "down" else (255, 200, 0)
+        cv2.putText(frame, f'STAGE: {global_stage.upper()}', (240, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.1, stage_color, 2, cv2.LINE_AA)
+
+        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
 HTML_LAYOUT = '''
@@ -118,22 +165,30 @@ HTML_LAYOUT = '''
         </div>
     </div>
     <div class="container">
-        {% block content %}{% endblock %}
+        <!--PAGE_CONTENT-->
     </div>
 </body>
 </html>
 '''
 
+def render_page(content, **kwargs):
+    template = HTML_LAYOUT.replace('<!--PAGE_CONTENT-->', content)
+    return render_template_string(template, **kwargs)
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
-        user = User(username=request.form.get('username'), password_hash=generate_password_hash(request.form.get('password')))
-        db.session.add(user)
-        db.session.commit()
-        login_user(user)
-        return redirect(url_for('dashboard'))
-    return render_template_string(HTML_LAYOUT + '''
-    {% block content %}
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        if username and password:
+            existing = User.query.filter_by(username=username).first()
+            if not existing:
+                user = User(username=username, password_hash=generate_password_hash(password))
+                db.session.add(user)
+                db.session.commit()
+                login_user(user)
+                return redirect(url_for('dashboard'))
+    return render_page('''
     <div class="card" style="max-width: 400px; margin: 40px auto;">
         <h2>Create Account</h2>
         <form method="POST">
@@ -142,18 +197,18 @@ def register():
             <button type="submit" class="btn">Sign Up</button>
         </form>
     </div>
-    {% endblock %}
     ''')
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        user = User.query.filter_by(username=request.form.get('username')).first()
-        if user and check_password_hash(user.password_hash, request.form.get('password')):
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        user = User.query.filter_by(username=username).first()
+        if user and check_password_hash(user.password_hash, password):
             login_user(user)
             return redirect(url_for('dashboard'))
-    return render_template_string(HTML_LAYOUT + '''
-    {% block content %}
+    return render_page('''
     <div class="card" style="max-width: 400px; margin: 40px auto;">
         <h2>Welcome Back</h2>
         <form method="POST">
@@ -162,7 +217,6 @@ def login():
             <button type="submit" class="btn">Sign In</button>
         </form>
     </div>
-    {% endblock %}
     ''')
 
 @app.route('/logout')
@@ -180,8 +234,7 @@ def dashboard():
     labels = [s.timestamp.strftime('%m/%d %H:%M') for s in reversed(sessions)]
     data = [s.rep_count for s in reversed(sessions)]
     
-    return render_template_string(HTML_LAYOUT + '''
-    {% block content %}
+    return render_page('''
     <div class="grid">
         <div class="card">
             <h3>Repetition Volume</h3>
@@ -223,14 +276,12 @@ def dashboard():
             options: { scales: { y: { beginAtZero: true } } }
         });
     </script>
-    {% endblock %}
     ''', sessions=sessions, total_reps=total_reps, labels=labels, data=data)
 
 @app.route('/workout')
 @login_required
 def workout():
-    return render_template_string(HTML_LAYOUT + '''
-    {% block content %}
+    return render_page('''
     <div class="card" style="text-align: center;">
         <h2>Live Tracking Feed</h2>
         <div style="margin: 20px 0;">
@@ -241,7 +292,6 @@ def workout():
             <button type="submit" class="btn">Save Workout Session</button>
         </form>
     </div>
-    {% endblock %}
     ''')
 
 @app.route('/video_feed')
