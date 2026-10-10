@@ -96,8 +96,11 @@ class ExerciseTracker:
         self.rep_score_deductions = set()
         self.feedback = "Ready - Stand straight to begin"
         self.warning_flags = []
+        
+        # Audio Vocal Triggers: ONLY set on form errors
         self.audio_event = None
         self.vocal_message = ""
+        
         self.min_angle_in_rep = 180.0
         self.active_side = "right"
         self.last_rep_time = 0
@@ -126,8 +129,9 @@ class ExerciseTracker:
                 self.smoothed_flare_angle = 0.0
                 self.warning_flags.clear()
                 self.feedback = f"{ex.capitalize()} mode activated"
-                self.audio_event = "mode_change"
-                self.vocal_message = f"{ex.capitalize()} mode"
+                # Silent: no vocal alert on mode switch
+                self.audio_event = None
+                self.vocal_message = ""
 
     def reset_reps(self):
         with self.lock:
@@ -137,8 +141,9 @@ class ExerciseTracker:
             self.rep_score_deductions.clear()
             self.warning_flags.clear()
             self.feedback = "Counter reset to 0."
-            self.audio_event = "reset"
-            self.vocal_message = "Counter reset"
+            # Silent: no vocal alert on reset
+            self.audio_event = None
+            self.vocal_message = ""
 
     def get_status(self):
         with self.lock:
@@ -181,16 +186,16 @@ class ExerciseTracker:
                 self.feedback = "No person detected. Position body in frame."
                 self.warning_flags = ["no_person"]
 
-            if audio_ev and vocal_msg:
-                self.audio_event = audio_ev
-                self.vocal_message = vocal_msg
+            # Store vocal trigger ONLY if it's an error; otherwise clear it so coach stays silent
+            self.audio_event = audio_ev
+            self.vocal_message = vocal_msg if vocal_msg else ""
 
             self._draw_hud(frame)
 
         return frame
 
     def _process_squat(self, landmarks, w, h):
-        """Squat tracking: Knee angle < 100 deg (down) and > 160 deg (up)."""
+        """Squat tracking: Speak ONLY if knee angle fails depth ('Squat deeper!') or knees cave ('Keep your knees out!')."""
         l_hip = [landmarks[23].x * w, landmarks[23].y * h]
         l_knee = [landmarks[25].x * w, landmarks[25].y * h]
         l_ankle = [landmarks[27].x * w, landmarks[27].y * h]
@@ -229,7 +234,6 @@ class ExerciseTracker:
         audio_ev = None
         vocal_msg = None
 
-        # Requirement: Count rep when angle drops below 100° and returns above 160°
         DOWN_THRESH = 100.0
         UP_THRESH = 160.0
 
@@ -254,7 +258,7 @@ class ExerciseTracker:
             if knee_cave:
                 self.feedback = "Knees caving! Keep knees wide"
 
-            # Rep Completion
+            # Rep Completion: SILENT (reps increment visually only)
             if knee_angle >= UP_THRESH:
                 self.stage = "up"
                 self.counter += 1
@@ -270,28 +274,28 @@ class ExerciseTracker:
                 self.form_score = int(0.7 * self.form_score + 0.3 * rep_score)
 
                 if deductions == 0:
-                    audio_ev = "rep_success"
-                    vocal_msg = f"{self.counter}! Perfect depth."
                     self.feedback = f"Rep #{self.counter} Complete! Perfect Depth (100%)"
                 else:
-                    audio_ev = "rep_warning"
-                    critique = "Squat lower next time." if "shallow_depth" in self.rep_score_deductions else "Keep knees out."
-                    vocal_msg = f"{self.counter}. {critique}"
+                    critique = "Squat deeper next time." if "shallow_depth" in self.rep_score_deductions else "Keep knees out."
                     self.feedback = f"Rep #{self.counter} Complete ({rep_score}% Form) - {critique}"
+                
+                # Zero speech on rep counts or successful reps
+                audio_ev = None
+                vocal_msg = None
 
-        # Real-time descent warnings
+        # Form Errors: Trigger speech ONLY on specific form errors
         if audio_ev is None:
             if knee_cave:
                 audio_ev = "warn_kneecave"
-                vocal_msg = "Push knees out"
+                vocal_msg = "Keep your knees out!"
             elif self.stage == "down" and knee_angle < 120.0 and self.min_angle_in_rep > 105.0:
                 audio_ev = "warn_depth"
-                vocal_msg = "Squat lower"
+                vocal_msg = "Squat deeper!"
 
         return audio_ev, vocal_msg
 
     def _process_pushup(self, landmarks, w, h):
-        """Push-up tracking: Elbow angle < 100 deg (down) and > 160 deg (up)."""
+        """Push-up tracking: Speak ONLY if chest doesn't go low enough ('Lower your chest!') or hips sag/pike ('Keep your back straight!')."""
         l_shoulder = [landmarks[11].x * w, landmarks[11].y * h]
         l_elbow = [landmarks[13].x * w, landmarks[13].y * h]
         l_wrist = [landmarks[15].x * w, landmarks[15].y * h]
@@ -331,7 +335,7 @@ class ExerciseTracker:
         back_sags = False
         if spine_angle < 160.0:
             back_sags = True
-            self.warning_flags.append("Back sagging or piked! Keep straight plank.")
+            self.warning_flags.append("Hips sagging or piked! Keep straight plank.")
             self.rep_score_deductions.add("spine_sag")
 
         # 2. Elbow flare (> 75 deg)
@@ -344,7 +348,6 @@ class ExerciseTracker:
         audio_ev = None
         vocal_msg = None
 
-        # Requirement: Count rep when elbow angle drops below 100° and returns above 160°
         DOWN_THRESH = 100.0
         UP_THRESH = 160.0
 
@@ -369,7 +372,7 @@ class ExerciseTracker:
             if back_sags:
                 self.feedback = "Keep core tight! Do not sag back"
 
-            # Rep Completion
+            # Rep Completion: SILENT (reps increment visually only)
             if elbow_angle >= UP_THRESH:
                 self.stage = "up"
                 self.counter += 1
@@ -387,25 +390,23 @@ class ExerciseTracker:
                 self.form_score = int(0.7 * self.form_score + 0.3 * rep_score)
 
                 if deductions == 0:
-                    audio_ev = "rep_success"
-                    vocal_msg = f"{self.counter}! Great push up."
                     self.feedback = f"Rep #{self.counter} Complete! Solid Form (100%)"
                 else:
-                    audio_ev = "rep_warning"
-                    critique = "Chest lower." if "shallow_chest" in self.rep_score_deductions else "Keep body straight."
-                    vocal_msg = f"{self.counter}. {critique}"
+                    critique = "Chest lower next time." if "shallow_chest" in self.rep_score_deductions else "Keep body straight."
                     self.feedback = f"Rep #{self.counter} Complete ({rep_score}% Form) - {critique}"
 
+                # Zero speech on rep counts or successful reps
+                audio_ev = None
+                vocal_msg = None
+
+        # Form Errors: Trigger speech ONLY on specific form errors
         if audio_ev is None:
             if back_sags:
                 audio_ev = "warn_back"
-                vocal_msg = "Keep back straight"
-            elif elbow_flare:
-                audio_ev = "warn_flare"
-                vocal_msg = "Tuck your elbows"
+                vocal_msg = "Keep your back straight!"
             elif self.stage == "down" and elbow_angle < 120.0 and self.min_angle_in_rep > 105.0:
                 audio_ev = "warn_chest"
-                vocal_msg = "Lower chest"
+                vocal_msg = "Lower your chest!"
 
         return audio_ev, vocal_msg
 
@@ -511,7 +512,6 @@ class VideoStreamManager:
             self.tracker.reset_reps()
 
     def update_demo_for_exercise(self):
-        """When exercise changes in demo mode, switch to the appropriate demo video."""
         with self.lock:
             if self.source_mode == "demo":
                 self._open_source()
@@ -533,7 +533,6 @@ class VideoStreamManager:
                 ret, frame = (False, None)
                 if self.cap and self.cap.isOpened():
                     ret, frame = self.cap.read()
-                    # Automatic video looping: reset to frame 0 when end of file is reached
                     if not ret:
                         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                         ret, frame = self.cap.read()
@@ -761,13 +760,13 @@ HTML_TEMPLATE = """
         <div class="brand-icon">⚡</div>
         <div class="brand-title">
           <h1>AI Vocal Fitness Coach</h1>
-          <p>Real-Time MediaPipe Pose Tracking (Squats & Push-Ups)</p>
+          <p>Form Correction Audio Alerts (Squats & Push-Ups)</p>
         </div>
       </div>
       <div class="header-actions">
         <button id="btn-voice-toggle" class="btn btn-voice">
           <span id="voice-icon">🎙️</span>
-          <span id="voice-label">Vocal Coach: ON</span>
+          <span id="voice-label">Vocal Alerts: ON</span>
         </button>
         <button id="btn-reset" class="btn btn-reset">
           🔄 Reset Reps
@@ -845,7 +844,7 @@ HTML_TEMPLATE = """
         <div class="feedback-banner" id="feedback-banner">
           <div class="feedback-avatar" id="feedback-avatar">🗣️</div>
           <div class="feedback-text">
-            <h4>Live AI Vocal Coach</h4>
+            <h4>Live AI Form Correction</h4>
             <p id="feedback-message">Ready - Stand straight to begin</p>
           </div>
         </div>
@@ -855,8 +854,9 @@ HTML_TEMPLATE = """
           <h3 id="guide-title">Squat Form Checklist</h3>
           <ul class="guide-list" id="guide-list">
             <li><span class="guide-bullet"></span> Knee angle drops below 100° for valid depth</li>
-            <li><span class="guide-bullet"></span> Returns above 160° to complete repetition</li>
-            <li><span class="guide-bullet"></span> Warning triggered if knees cave or depth is shallow</li>
+            <li><span class="guide-bullet"></span> Vocal error alert: 'Squat deeper!' if depth is shallow</li>
+            <li><span class="guide-bullet"></span> Vocal error alert: 'Keep your knees out!' if knees cave</li>
+            <li><span class="guide-bullet"></span> Silent during good form and successful reps</li>
           </ul>
         </div>
       </div>
@@ -869,7 +869,6 @@ HTML_TEMPLATE = """
 
   <script>
     let voiceEnabled = true;
-    let lastSpokenText = "";
     let lastSpokenTime = 0;
     let lastRepCount = 0;
     let currentInputSource = "demo";
@@ -901,48 +900,34 @@ HTML_TEMPLATE = """
     const guideList = document.getElementById("guide-list");
 
     // ----------------------------------------------------
-    // REAL-TIME VOCAL COACH (Web Speech API) WITH 3S DEBOUNCE
+    // VOCAL ALERTS ENGINE: SPEAKS ONLY ON FORM ERRORS
+    // DEBOUNCE: STRICT 4-SECOND DELAY BETWEEN ALERTS
     // ----------------------------------------------------
-    function speakVocalAlert(text, isRep = false) {
-      if (!voiceEnabled || !window.speechSynthesis || !text) return;
+    function speakFormError(errorMessage) {
+      if (!voiceEnabled || !window.speechSynthesis || !errorMessage) return;
       const now = Date.now();
 
-      // Immediate callout for rep count
-      if (isRep) {
-        window.speechSynthesis.cancel();
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.rate = 1.05;
-        window.speechSynthesis.speak(utter);
-        lastSpokenText = text;
-        lastSpokenTime = now;
+      // 4-second throttle between audio alerts
+      if (now - lastSpokenTime < 4000) {
         return;
       }
 
-      // 3-second debounce throttle for repeated form correction alerts
-      if (text === lastSpokenText && (now - lastSpokenTime < 3000)) {
-        return;
-      }
-
-      // Throttle all form warnings to at least 1.5s interval
-      if (now - lastSpokenTime > 1500) {
-        window.speechSynthesis.cancel();
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.rate = 1.05;
-        window.speechSynthesis.speak(utter);
-        lastSpokenText = text;
-        lastSpokenTime = now;
-      }
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(errorMessage);
+      utter.rate = 1.05;
+      utter.pitch = 1.0;
+      window.speechSynthesis.speak(utter);
+      lastSpokenTime = now;
     }
 
     btnVoiceToggle.addEventListener("click", () => {
       voiceEnabled = !voiceEnabled;
       if (voiceEnabled) {
         btnVoiceToggle.className = "btn btn-voice";
-        voiceLabel.textContent = "Vocal Coach: ON";
-        speakVocalAlert("Vocal coach activated", true);
+        voiceLabel.textContent = "Vocal Alerts: ON";
       } else {
         btnVoiceToggle.className = "btn btn-voice muted";
-        voiceLabel.textContent = "Vocal Coach: MUTED";
+        voiceLabel.textContent = "Vocal Alerts: MUTED";
         if (window.speechSynthesis) window.speechSynthesis.cancel();
       }
     });
@@ -953,24 +938,22 @@ HTML_TEMPLATE = """
     function updateTelemetry(data) {
       if (!data) return;
 
+      // 1. Rep Counter: Visual bump only (SILENT: no speech on reps)
       if (data.reps !== lastRepCount) {
-        const isNewRep = data.reps > lastRepCount;
         lastRepCount = data.reps;
         repsEl.textContent = data.reps;
         repsEl.style.transform = "scale(1.25)";
         setTimeout(() => { repsEl.style.transform = "scale(1)"; }, 200);
-
-        if (isNewRep && data.vocal_message) {
-          speakVocalAlert(data.vocal_message, true);
-        }
       } else {
         repsEl.textContent = data.reps;
       }
 
+      // Phase/Stage Badge
       const isDown = data.stage === "down";
       phaseBadgeEl.textContent = isDown ? "DOWN" : "UP";
       phaseBadgeEl.className = isDown ? "phase-badge down" : "phase-badge";
 
+      // Angles & Labels
       if (data.exercise === "squat") {
         primaryAngleLabel.textContent = "Knee Angle";
         primaryAngleVal.textContent = Math.round(data.primary_angle) + "°";
@@ -985,6 +968,7 @@ HTML_TEMPLATE = """
         activeSideText.textContent = `Flare: ${Math.round(data.flare_angle)}° (Max 75°)`;
       }
 
+      // Form Quality Score
       const score = Math.max(0, Math.min(100, data.form_score));
       scoreValEl.textContent = score + "%";
       scoreBarEl.style.width = score + "%";
@@ -999,14 +983,17 @@ HTML_TEMPLATE = """
         scoreBarEl.style.background = "var(--accent-red)";
       }
 
+      // Status Feedback Banner
       feedbackMsg.textContent = data.feedback;
       if (data.warnings && data.warnings.length > 0) {
         feedbackBanner.className = "feedback-banner warning";
-        if (data.vocal_message && !data.vocal_message.startsWith(String(data.reps))) {
-          speakVocalAlert(data.vocal_message, false);
-        }
       } else {
         feedbackBanner.className = "feedback-banner";
+      }
+
+      // 2. Speak ONLY on specific form errors (warn_*) with 4s debounce
+      if (data.audio_event && data.audio_event.startsWith("warn_") && data.vocal_message) {
+        speakFormError(data.vocal_message);
       }
     }
 
@@ -1031,15 +1018,17 @@ HTML_TEMPLATE = """
         guideTitle.textContent = "Squat Form Checklist";
         guideList.innerHTML = `
           <li><span class="guide-bullet"></span> Knee angle drops below 100° for valid depth</li>
-          <li><span class="guide-bullet"></span> Returns above 160° to complete repetition</li>
-          <li><span class="guide-bullet"></span> Warning triggered if knees cave or depth is shallow</li>
+          <li><span class="guide-bullet"></span> Vocal error alert: 'Squat deeper!' if depth is shallow</li>
+          <li><span class="guide-bullet"></span> Vocal error alert: 'Keep your knees out!' if knees cave</li>
+          <li><span class="guide-bullet"></span> Silent during good form and successful reps</li>
         `;
       } else {
         guideTitle.textContent = "Push-Up Form Checklist";
         guideList.innerHTML = `
-          <li><span class="guide-bullet"></span> Elbow angle drops below 100° for chest depth</li>
-          <li><span class="guide-bullet"></span> Returns above 160° to complete repetition</li>
-          <li><span class="guide-bullet"></span> Warning triggered if back sags (< 160°) or elbows flare (> 75°)</li>
+          <li><span class="guide-bullet"></span> Lower chest until elbow angle reaches ≤ 100°</li>
+          <li><span class="guide-bullet"></span> Vocal error alert: 'Lower your chest!' if depth is shallow</li>
+          <li><span class="guide-bullet"></span> Vocal error alert: 'Keep your back straight!' if hips sag/pike</li>
+          <li><span class="guide-bullet"></span> Silent during good form and successful reps</li>
         `;
       }
 
@@ -1048,7 +1037,6 @@ HTML_TEMPLATE = """
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ exercise: selected })
       });
-      speakVocalAlert(selected === "squat" ? "Squats mode selected" : "Push-ups mode selected", true);
       videoFeedImg.src = "/video_feed?t=" + Date.now();
     });
 
@@ -1059,7 +1047,6 @@ HTML_TEMPLATE = """
       const selected = sourceSelect.value;
       currentInputSource = selected;
 
-      // Clean up browser webcam stream if leaving browser_cam mode
       if (selected !== "browser_cam" && webcamStream) {
         isCapturing = false;
         webcamStream.getTracks().forEach(t => t.stop());
@@ -1094,14 +1081,12 @@ HTML_TEMPLATE = """
 
           isCapturing = true;
           runCameraCaptureLoop();
-          speakVocalAlert("Browser camera active", true);
         } catch(err) {
           alert("Could not access browser camera: " + err.message);
           sourceSelect.value = "demo";
           currentInputSource = "demo";
         }
       } else {
-        // "demo" or "webcam"
         const res = await fetch("/set_source", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1112,8 +1097,6 @@ HTML_TEMPLATE = """
         if (selected === "webcam" && data.source === "demo") {
           alert("Physical webcam device index 0 is unavailable on this machine. Falling back to pre-recorded demo video.");
           sourceSelect.value = "demo";
-        } else {
-          speakVocalAlert(selected === "webcam" ? "Live webcam connected" : "Demo video loop loaded", true);
         }
       }
     });
@@ -1123,7 +1106,6 @@ HTML_TEMPLATE = """
       await fetch("/reset", { method: "POST" });
       lastRepCount = 0;
       repsEl.textContent = "0";
-      speakVocalAlert("Counter reset", true);
     });
 
     // In-browser camera capture loop
@@ -1297,7 +1279,8 @@ if __name__ == '__main__':
 🏋️ Exercises Supported:   Squats & Push-Ups (MediaPipe Pose)
 📹 Demo Files:            squat_demo.mp4 & pushup_demo.mp4 (Auto-Looping)
 🎥 Live Webcam:           cv2.VideoCapture(0) & In-Browser Camera
-🎙️ AI Vocal Coach:        Web Speech API with 3s debounce
+🎙️ AI Vocal Coach:        Speaks ONLY on Form Errors (4s Debounce)
+                          (Silent during good form & successful reps)
 ======================================================================
 """
     print(banner, flush=True)
