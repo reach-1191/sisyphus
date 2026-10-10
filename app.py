@@ -21,6 +21,7 @@ from flask import (
     redirect,
     url_for,
     flash,
+    session as flask_session,
 )
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (
@@ -74,15 +75,18 @@ login_manager.login_view = 'login'
 
 
 # ---------------------------------------------------------
-# DATABASE MODELS
+# DATABASE MODELS WITH EXP, LEVELING & PERSISTENT BADGES
 # ---------------------------------------------------------
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
+    exp = db.Column(db.Integer, default=0, nullable=False)
+    level = db.Column(db.Integer, default=1, nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     sessions = db.relationship('ExerciseSession', backref='user', lazy=True, cascade='all, delete-orphan')
+    badges = db.relationship('Badge', backref='user', lazy=True, cascade='all, delete-orphan')
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -111,6 +115,147 @@ class ExerciseSession(db.Model):
             "timestamp": self.timestamp.strftime("%Y-%m-%d %H:%M:%S") if self.timestamp else "",
             "avg_form_accuracy": round(self.avg_form_accuracy, 1)
         }
+
+
+class Badge(db.Model):
+    __tablename__ = 'badges'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.String(255), nullable=False)
+    icon = db.Column(db.String(50), nullable=False, default='🏆')
+    unlocked_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "description": self.description,
+            "icon": self.icon,
+            "unlocked_at": self.unlocked_at.strftime("%Y-%m-%d %H:%M:%S") if self.unlocked_at else ""
+        }
+
+
+AVAILABLE_BADGES = [
+    {
+        "id": "first_step",
+        "name": "First Step",
+        "icon": "🌱",
+        "description": "Completed your first workout session",
+        "requirement": "Complete 1 workout"
+    },
+    {
+        "id": "century_club",
+        "name": "Century Club",
+        "icon": "💯",
+        "description": "Completed 100 total repetitions across workouts",
+        "requirement": "Reach 100 total reps"
+    },
+    {
+        "id": "form_perfectionist",
+        "name": "Form Perfectionist",
+        "icon": "🎯",
+        "description": "Achieved 90%+ average form accuracy",
+        "requirement": "Average form ≥ 90%"
+    },
+    {
+        "id": "iron_legs",
+        "name": "Iron Legs",
+        "icon": "🦵",
+        "description": "Completed 25+ Squats in total",
+        "requirement": "Log 25+ Squats"
+    },
+    {
+        "id": "pushup_pro",
+        "name": "Push Prodigy",
+        "icon": "💪",
+        "description": "Completed 25+ Push-Ups in total",
+        "requirement": "Log 25+ Push-Ups"
+    },
+    {
+        "id": "bicep_beast",
+        "name": "Bicep Beast",
+        "icon": "⚡",
+        "description": "Completed 25+ Dumbbell Curls in total",
+        "requirement": "Log 25+ Curls"
+    },
+    {
+        "id": "dedicated_athlete",
+        "name": "Dedicated Athlete",
+        "icon": "🔥",
+        "description": "Logged 5 or more workout sessions",
+        "requirement": "Complete 5 workouts"
+    },
+    {
+        "id": "level_5_champion",
+        "name": "Level 5 Champion",
+        "icon": "👑",
+        "description": "Reached Level 5 in Sisyphus AI",
+        "requirement": "Reach Level 5"
+    }
+]
+
+
+def check_and_award_badges(user):
+    """Evaluate and award persistent SQLite badges for user."""
+    user_sessions = ExerciseSession.query.filter_by(user_id=user.id).all()
+    total_reps = sum(s.rep_count for s in user_sessions)
+    total_workouts = len(user_sessions)
+    avg_form = (
+        round(sum(s.avg_form_accuracy for s in user_sessions) / total_workouts, 1)
+        if total_workouts > 0
+        else 100.0
+    )
+
+    squat_reps = sum(s.rep_count for s in user_sessions if "squat" in s.exercise_type.lower())
+    pushup_reps = sum(s.rep_count for s in user_sessions if "push" in s.exercise_type.lower())
+    curl_reps = sum(s.rep_count for s in user_sessions if "curl" in s.exercise_type.lower())
+
+    existing_badge_names = {b.name for b in user.badges}
+    new_badges = []
+
+    badge_rules = [
+        ("First Step", "Completed your first workout session", "🌱", total_workouts >= 1),
+        ("Century Club", "Completed 100 total repetitions across workouts", "💯", total_reps >= 100),
+        ("Form Perfectionist", "Achieved 90%+ average form accuracy", "🎯", total_workouts >= 1 and avg_form >= 90.0),
+        ("Iron Legs", "Completed 25+ Squats in total", "🦵", squat_reps >= 25),
+        ("Push Prodigy", "Completed 25+ Push-Ups in total", "💪", pushup_reps >= 25),
+        ("Bicep Beast", "Completed 25+ Dumbbell Curls in total", "⚡", curl_reps >= 25),
+        ("Dedicated Athlete", "Logged 5 or more workout sessions", "🔥", total_workouts >= 5),
+        ("Level 5 Champion", "Reached Level 5 in Sisyphus AI", "👑", user.level >= 5),
+    ]
+
+    for name, desc, icon, condition in badge_rules:
+        if name not in existing_badge_names and condition:
+            b = Badge(user_id=user.id, name=name, description=desc, icon=icon)
+            db.session.add(b)
+            new_badges.append(b)
+
+    if new_badges:
+        db.session.commit()
+    return new_badges
+
+
+def init_db():
+    """Ensure database schema has required columns and tables."""
+    with app.app_context():
+        try:
+            from sqlalchemy import text
+            with db.engine.connect() as conn:
+                res = conn.execute(text("PRAGMA table_info(users)"))
+                cols = [row[1] for row in res.fetchall()]
+                if 'exp' not in cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN exp INTEGER DEFAULT 0 NOT NULL"))
+                if 'level' not in cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN level INTEGER DEFAULT 1 NOT NULL"))
+                conn.commit()
+        except Exception as e:
+            print(f"[!] DB migration notice: {e}")
+        db.create_all()
+
+
+init_db()
 
 
 @login_manager.user_loader
@@ -186,7 +331,7 @@ class MockLandmark:
 # ---------------------------------------------------------
 class ExerciseTracker:
     def __init__(self, model_path=MODEL_PATH):
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.exercise = "squat"  # "squat", "pushup", or "curl"
         self.counter = 0
         self.stage = "up"        # for squat/pushup: "up"/"down"; for curl: "down" (extended) / "up" (curled)
@@ -209,12 +354,15 @@ class ExerciseTracker:
         # Silent on movement updates, starting positions, and successful reps
         self.audio_event = None
         self.vocal_message = ""
+        self.latest_audio_alert = ""
+        self.latest_alert_time = 0.0
         self.last_audio_trigger_time = 0.0
 
         self.min_angle_in_rep = 180.0
         self.max_angle_in_rep = 180.0
         self.active_side = "right"
         self.last_rep_time = 0
+        self.last_landmarks = None
 
         # MediaPipe Pose Task
         options = vision.PoseLandmarkerOptions(
@@ -247,6 +395,9 @@ class ExerciseTracker:
                 # SILENT: No vocal alerts on mode switch
                 self.audio_event = None
                 self.vocal_message = ""
+                self.latest_audio_alert = ""
+                self.latest_alert_time = 0.0
+                self.last_landmarks = None
 
     def reset_reps(self):
         with self.lock:
@@ -263,6 +414,9 @@ class ExerciseTracker:
             # SILENT: No vocal alerts on reset
             self.audio_event = None
             self.vocal_message = ""
+            self.latest_audio_alert = ""
+            self.latest_alert_time = 0.0
+            self.last_landmarks = None
 
     def get_duration(self):
         return max(0.0, time.time() - self.session_start_time)
@@ -293,16 +447,24 @@ class ExerciseTracker:
                 "active_side": self.active_side
             }
 
-    def process_frame(self, frame, custom_landmarks=None):
+    def process_frame(self, frame, custom_landmarks=None, skip_pose=False):
         h, w, _ = frame.shape
         landmarks = custom_landmarks
 
         if landmarks is None:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            result = self.landmarker.detect(mp_image)
-            if result.pose_landmarks and len(result.pose_landmarks) > 0:
-                landmarks = result.pose_landmarks[0]
+            if skip_pose and self.last_landmarks is not None:
+                # Frame skipping optimization: reuse cached pose tracking results
+                landmarks = self.last_landmarks
+            else:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                result = self.landmarker.detect(mp_image)
+                if result.pose_landmarks and len(result.pose_landmarks) > 0:
+                    landmarks = result.pose_landmarks[0]
+                    self.last_landmarks = landmarks
+                else:
+                    landmarks = None
+                    self.last_landmarks = None
 
         with self.lock:
             audio_ev = None
@@ -325,10 +487,12 @@ class ExerciseTracker:
 
             # 4-second throttle check for backend alerts
             now = time.time()
-            if audio_ev and audio_ev.startswith("warn_"):
+            if audio_ev and audio_ev.startswith("warn_") and vocal_msg:
                 if now - self.last_audio_trigger_time >= 4.0:
                     self.audio_event = audio_ev
-                    self.vocal_message = vocal_msg or ""
+                    self.vocal_message = vocal_msg
+                    self.latest_audio_alert = vocal_msg
+                    self.latest_alert_time = now
                     self.last_audio_trigger_time = now
                 else:
                     self.audio_event = None
@@ -479,7 +643,6 @@ class ExerciseTracker:
             self.active_side = "left"
 
         raw_elbow_angle = calculate_angle(shoulder, elbow, wrist)
-        # Track alignment between Shoulder, Hip, and Ankle
         raw_spine_angle = calculate_angle(shoulder, hip, ankle)
         raw_flare_angle = calculate_elbow_flare(shoulder, hip, elbow)
 
@@ -618,9 +781,6 @@ class ExerciseTracker:
         audio_ev = None
         vocal_msg = None
 
-        # Hysteresis state machine:
-        # stage == "down": Arm in extension (>150 deg). Waiting to reach full curl (<40 deg).
-        # stage == "up": Full curl reached (<40 deg). Waiting to return to full extension (>150 deg) to complete rep.
         EXT_THRESH = 150.0
         CURL_THRESH = 40.0
 
@@ -707,14 +867,14 @@ class ExerciseTracker:
         time_str = f"{mins:02d}:{secs:02d}"
 
         cv2.putText(frame, f"SISYPHUS AI  |  EXERCISE: {self.exercise.upper()}  |  TIME: {time_str}",
-                    (20, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 198), 1, cv2.LINE_AA)
+                    (20, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (250, 204, 21), 1, cv2.LINE_AA)
 
         cv2.putText(frame, "REPS", (20, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (156, 163, 175), 1, cv2.LINE_AA)
-        rep_col = (0, 255, 198) if self.stage == "down" else (255, 255, 255)
+        rep_col = (250, 204, 21) if self.stage == "down" else (255, 255, 255)
         cv2.putText(frame, str(self.counter), (20, 85), cv2.FONT_HERSHEY_SIMPLEX, 1.25, rep_col, 3, cv2.LINE_AA)
 
         cv2.putText(frame, "STAGE", (115, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (156, 163, 175), 1, cv2.LINE_AA)
-        stage_col = (0, 255, 198) if self.stage == "down" else (245, 158, 11)
+        stage_col = (250, 204, 21) if self.stage == "down" else (245, 158, 11)
         cv2.putText(frame, self.stage.upper(), (115, 85), cv2.FONT_HERSHEY_SIMPLEX, 1.05, stage_col, 2, cv2.LINE_AA)
 
         if self.exercise == "squat":
@@ -729,7 +889,7 @@ class ExerciseTracker:
 
         score_x = max(390, w - 200)
         cv2.putText(frame, "FORM SCORE", (score_x, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (156, 163, 175), 1, cv2.LINE_AA)
-        score_col = (0, 255, 198) if self.form_score >= 80 else ((245, 158, 11) if self.form_score >= 60 else (239, 68, 68))
+        score_col = (250, 204, 21) if self.form_score >= 80 else ((245, 158, 11) if self.form_score >= 60 else (239, 68, 68))
         cv2.putText(frame, f"{self.form_score}%", (score_x, 85), cv2.FONT_HERSHEY_SIMPLEX, 1.05, score_col, 2, cv2.LINE_AA)
 
         fb_h = 42
@@ -737,7 +897,7 @@ class ExerciseTracker:
         cv2.rectangle(fb_overlay, (0, h - fb_h), (w, h), (9, 13, 22), -1)
         cv2.addWeighted(fb_overlay, 0.8, frame, 0.2, 0, frame)
 
-        msg_col = (239, 68, 68) if self.warning_flags else ((0, 255, 198) if "Complete" in self.feedback or "Great" in self.feedback else (243, 244, 246))
+        msg_col = (239, 68, 68) if self.warning_flags else ((250, 204, 21) if "Complete" in self.feedback or "Great" in self.feedback else (243, 244, 246))
         cv2.putText(frame, f"FEEDBACK: {self.feedback}", (20, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.58, msg_col, 2, cv2.LINE_AA)
 
 
@@ -755,7 +915,7 @@ class SyntheticDemoEngine:
 
     def generate(self, exercise, t):
         frame = np.zeros((self.h, self.w, 3), dtype=np.uint8)
-        # Background subtle gym styling
+        # Background gym styling
         cv2.rectangle(frame, (0, 0), (self.w, self.h), (12, 17, 28), -1)
         cv2.line(frame, (0, int(self.h * 0.88)), (self.w, int(self.h * 0.88)), (25, 35, 55), 2)
 
@@ -763,9 +923,8 @@ class SyntheticDemoEngine:
         landmarks = [MockLandmark(0.5, 0.5) for _ in range(33)]
 
         if exercise == "curl":
-            # Bicep curl sinusoidal animation (period ~ 3.0s)
-            cycle = (math.sin(t * 2.1) + 1.0) / 2.0  # 0.0 (extended) to 1.0 (curled)
-            arm_angle_deg = 160.0 - cycle * 125.0    # 160° down to 35°
+            cycle = (math.sin(t * 2.1) + 1.0) / 2.0
+            arm_angle_deg = 160.0 - cycle * 125.0
             arm_rad = math.radians(arm_angle_deg)
 
             sh_x, sh_y = 350, 170
@@ -786,7 +945,6 @@ class SyntheticDemoEngine:
             landmarks[27] = MockLandmark(300 / self.w, 440 / self.h)
             landmarks[28] = MockLandmark(340 / self.w, 440 / self.h)
 
-            # Draw dumbbell at hand position
             cv2.circle(frame, (wr_x - 12, wr_y), 10, (140, 150, 160), -1)
             cv2.circle(frame, (wr_x + 12, wr_y), 10, (140, 150, 160), -1)
             cv2.line(frame, (wr_x - 12, wr_y), (wr_x + 12, wr_y), (200, 210, 220), 4)
@@ -806,7 +964,7 @@ class SyntheticDemoEngine:
             landmarks[27] = MockLandmark(320 / self.w, 440 / self.h)
             landmarks[28] = MockLandmark(340 / self.w, 440 / self.h)
 
-        else: # pushup
+        else:  # pushup
             cycle = (math.sin(t * 2.0) + 1.0) / 2.0
             sh_y = int(230 + cycle * 70)
             hip_y = int(250 + cycle * 50)
@@ -826,7 +984,7 @@ class SyntheticDemoEngine:
 
 
 # ---------------------------------------------------------
-# VIDEO STREAM & MULTI-SOURCE MANAGER
+# VIDEO STREAM & RESOURCE LIFECYCLE MANAGER
 # ---------------------------------------------------------
 class VideoStreamManager:
     def __init__(self, tracker):
@@ -834,11 +992,13 @@ class VideoStreamManager:
         self.cap = None
         self.source_mode = "demo"  # "demo", "webcam", or "browser_cam"
         self.latest_frame_bytes = None
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.running = True
         self.synthetic_engine = SyntheticDemoEngine(640, 480)
         self.synthetic_time = 0.0
-        self._open_source()
+        self.active_viewers = 0
+        self.is_paused = False
+        self.frame_count = 0
 
         self.thread = threading.Thread(target=self._capture_loop, daemon=True)
         self.thread.start()
@@ -852,7 +1012,10 @@ class VideoStreamManager:
 
     def _open_source(self):
         if self.cap is not None:
-            self.cap.release()
+            try:
+                self.cap.release()
+            except Exception:
+                pass
             self.cap = None
 
         if self.source_mode == "webcam":
@@ -870,33 +1033,87 @@ class VideoStreamManager:
                 print(f"[*] Opening demo video source: {demo_path}")
                 self.cap = cv2.VideoCapture(demo_path)
 
+    def release_camera(self):
+        """Cleanly release VideoCapture hardware/file descriptor resources."""
+        with self.lock:
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+                print("[+] VideoCapture resource successfully released.")
+
+    def add_viewer(self):
+        """Track active stream viewer and start camera if needed."""
+        with self.lock:
+            self.active_viewers += 1
+            self.is_paused = False
+            if self.cap is None and self.source_mode in ["demo", "webcam"]:
+                self._open_source()
+
+    def remove_viewer(self):
+        """Untrack viewer; automatically release camera when no clients are viewing."""
+        with self.lock:
+            self.active_viewers = max(0, self.active_viewers - 1)
+            if self.active_viewers == 0:
+                if self.cap is not None:
+                    try:
+                        self.cap.release()
+                    except Exception:
+                        pass
+                    self.cap = None
+                    print("[+] All stream clients disconnected. Camera VideoCapture released.")
+
+    def pause(self):
+        """Pause stream and release camera."""
+        self.is_paused = True
+        self.release_camera()
+
+    def resume(self):
+        """Resume stream and re-open video source."""
+        with self.lock:
+            self.is_paused = False
+            if self.active_viewers > 0 and self.cap is None:
+                self._open_source()
+
     def set_source(self, mode):
         with self.lock:
             self.source_mode = mode
-            self._open_source()
+            if self.active_viewers > 0 and not self.is_paused:
+                self._open_source()
+            elif mode == "browser_cam":
+                if self.cap is not None:
+                    self.cap.release()
+                    self.cap = None
             self.tracker.reset_reps()
 
     def update_demo_for_exercise(self):
         with self.lock:
-            if self.source_mode == "demo":
+            if self.source_mode == "demo" and self.active_viewers > 0 and not self.is_paused:
                 self._open_source()
 
     def _capture_loop(self):
-        target_fps = 25.0
+        target_fps = 30.0
         frame_interval = 1.0 / target_fps
 
         while self.running:
-            if self.source_mode == "browser_cam":
-                time.sleep(0.1)
+            # If in browser camera mode, or paused, or no viewers connected, sleep and conserve CPU
+            if self.source_mode == "browser_cam" or self.is_paused or self.active_viewers == 0:
+                time.sleep(0.05)
                 continue
 
             start_t = time.time()
             self.synthetic_time += frame_interval
+            self.frame_count += 1
 
             frame = None
             custom_landmarks = None
 
             with self.lock:
+                if self.cap is None and self.source_mode in ["webcam", "demo"]:
+                    self._open_source()
+
                 # 1. Try physical/demo capture if available
                 if self.cap and self.cap.isOpened():
                     ret, frame = self.cap.read()
@@ -910,13 +1127,21 @@ class VideoStreamManager:
                         self.tracker.exercise, self.synthetic_time
                     )
 
+            # Performance Optimization: Resize incoming frame to 480x360 before MediaPipe processing to reduce CPU/GPU load
             h, w = frame.shape[:2]
-            if w > 720:
-                scale = 720.0 / w
-                frame = cv2.resize(frame, (720, int(h * scale)), interpolation=cv2.INTER_AREA)
+            if w != 480 or h != 360:
+                frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_AREA)
 
-            processed = self.tracker.process_frame(frame, custom_landmarks=custom_landmarks)
-            ret, buf = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            # Performance Optimization: Process pose tracking every 2nd frame (frame skipping) to maintain smooth 30+ FPS stream playback
+            skip_pose = (self.frame_count % 2 != 0)
+            processed = self.tracker.process_frame(
+                frame,
+                custom_landmarks=custom_landmarks,
+                skip_pose=skip_pose
+            )
+
+            # Bandwidth Optimization: Set JPEG encoding compression parameter to quality 65
+            ret, buf = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 65])
             if ret:
                 with self.lock:
                     self.latest_frame_bytes = buf.tobytes()
@@ -926,24 +1151,34 @@ class VideoStreamManager:
                 time.sleep(frame_interval - elapsed)
 
     def generate_frames(self):
+        """Yield multipart JPEG frames and properly release camera resource when disconnected."""
+        self.add_viewer()
         last_yielded = None
-        while self.running:
-            with self.lock:
-                f_bytes = self.latest_frame_bytes
+        try:
+            while self.running and not self.is_paused:
+                with self.lock:
+                    f_bytes = self.latest_frame_bytes
 
-            if f_bytes and f_bytes != last_yielded:
-                last_yielded = f_bytes
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + f_bytes + b'\r\n')
-            time.sleep(0.02)
+                if f_bytes and f_bytes != last_yielded:
+                    last_yielded = f_bytes
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + f_bytes + b'\r\n')
+                time.sleep(0.02)
+        finally:
+            self.remove_viewer()
 
 
 tracker = ExerciseTracker()
 stream_mgr = VideoStreamManager(tracker)
 
 
+def generate_frames():
+    """Global video stream generator."""
+    return stream_mgr.generate_frames()
+
+
 # ---------------------------------------------------------
-# EMBEDDED HIGH-PERFORMANCE DARK-MODE UI
+# BENTO BOX MODERN UI TEMPLATES (CREXTIO INSPIRED)
 # ---------------------------------------------------------
 LAYOUT_SHELL = """
 <!DOCTYPE html>
@@ -954,113 +1189,357 @@ LAYOUT_SHELL = """
   <title>Sisyphus AI Coach - Smart Form Tracker</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
-      --bg: #090d16;
-      --card-bg: #111827;
-      --card-border: #1f2937;
-      --accent: #00ffc6;
-      --accent-dim: rgba(0, 255, 198, 0.15);
-      --accent-blue: #3b82f6;
-      --accent-amber: #f59e0b;
+      --bg-main: #f7f7f8;
+      --card-bg: #ffffff;
+      --card-border: #e5e7eb;
+      --card-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.04), 0 8px 10px -6px rgba(0, 0, 0, 0.02);
+      --card-shadow-hover: 0 20px 30px -10px rgba(0, 0, 0, 0.07);
+      --yellow: #facc15;
+      --yellow-hover: #eab308;
+      --yellow-light: #fef08a;
+      --yellow-subtle: rgba(250, 204, 21, 0.16);
+      --charcoal: #18181b;
+      --charcoal-hover: #27272a;
+      --charcoal-border: #27272a;
+      --text-primary: #18181b;
+      --text-secondary: #71717a;
+      --text-muted: #a1a1aa;
+      --accent-green: #10b981;
       --accent-red: #ef4444;
-      --text: #f3f4f6;
-      --subtext: #9ca3af;
-      --font: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-      --mono: 'JetBrains Mono', monospace;
+      --accent-blue: #3b82f6;
+      --radius-bento: 20px;
+      --radius-pill: 9999px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: var(--font);
-      background: var(--bg);
-      color: var(--text);
+      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at top right, rgba(250, 204, 21, 0.16), transparent 45%), var(--bg-main);
+      color: var(--text-primary);
       min-height: 100vh;
       display: flex;
       flex-direction: column;
+      -webkit-font-smoothing: antialiased;
     }
-    .navbar {
-      display: flex; justify-content: space-between; align-items: center;
-      background: #030712; padding: 16px 32px; border-bottom: 1px solid var(--card-border);
-      flex-wrap: wrap; gap: 12px;
+    .navbar-container {
+      padding: 16px 24px;
+      max-width: 1360px;
+      margin: 0 auto;
+      width: 100%;
     }
-    .logo {
-      display: flex; align-items: center; gap: 10px;
-      font-weight: 800; font-size: 1.25rem; color: var(--accent); letter-spacing: 0.05em;
+    .navbar-floating {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.9);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius-pill);
+      padding: 10px 24px;
+      box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.03);
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .logo-text {
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: var(--text-primary);
+      letter-spacing: -0.02em;
       text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .logo-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--yellow);
+      border-radius: 50%;
+      display: inline-block;
     }
     .logo-badge {
-      background: var(--accent-dim); border: 1px solid var(--accent);
-      color: var(--accent); font-size: 0.72rem; padding: 2px 8px; border-radius: 999px; font-weight: 700;
+      background: var(--yellow-subtle);
+      border: 1px solid rgba(250, 204, 21, 0.5);
+      color: #854d0e;
+      font-size: 0.72rem;
+      padding: 2px 10px;
+      border-radius: var(--radius-pill);
+      font-weight: 700;
     }
-    .nav-links { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-    .nav-links a {
-      color: var(--subtext); text-decoration: none; font-size: 0.88rem; font-weight: 600;
-      padding: 6px 12px; border-radius: 8px; transition: all 0.15s ease;
+    .nav-pills {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #f4f4f5;
+      padding: 4px;
+      border-radius: var(--radius-pill);
     }
-    .nav-links a:hover, .nav-links a.active { color: #fff; background: rgba(255, 255, 255, 0.05); }
-    .container { width: 100%; max-width: 1280px; margin: 24px auto; padding: 0 20px; flex: 1; }
-    .card {
-      background: var(--card-bg); border-radius: 14px; padding: 22px;
-      border: 1px solid var(--card-border); box-shadow: 0 8px 24px -4px rgba(0,0,0,0.5);
-    }
-    .btn {
-      background: var(--accent); color: #000; border: none; padding: 10px 18px;
-      border-radius: 8px; font-weight: 700; font-size: 0.86rem; cursor: pointer;
-      text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    .nav-pill {
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 8px 18px;
+      border-radius: var(--radius-pill);
+      color: var(--text-secondary);
       transition: all 0.15s ease;
     }
-    .btn:hover { opacity: 0.92; transform: translateY(-1px); }
-    .btn-secondary {
-      background: rgba(255, 255, 255, 0.08); color: var(--text); border: 1px solid var(--card-border);
+    .nav-pill:hover {
+      color: var(--text-primary);
     }
-    .btn-secondary:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
-    .btn-voice {
-      background: rgba(0, 255, 198, 0.12); color: var(--accent); border: 1px solid rgba(0, 255, 198, 0.3);
+    .nav-pill.active {
+      background: var(--charcoal);
+      color: #ffffff;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
     }
-    .btn-voice.muted {
-      background: rgba(239, 68, 68, 0.12); color: var(--accent-red); border-color: rgba(239, 68, 68, 0.3);
+    .user-badge-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
-    .stat-val { font-size: 2.3rem; font-weight: 800; font-family: var(--mono); color: var(--accent); margin: 6px 0; }
-    .stat-sub { font-size: 0.8rem; color: var(--subtext); }
-    select.custom-select {
-      background: #030712; color: #fff; border: 1px solid var(--accent);
-      border-radius: 8px; padding: 8px 12px; font-size: 0.88rem; font-weight: 700;
-      cursor: pointer; outline: none;
+    .user-avatar {
+      width: 36px;
+      height: 36px;
+      background: var(--charcoal);
+      color: #ffffff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.88rem;
+      font-weight: 700;
     }
-    input[type="text"], input[type="password"] {
-      width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--card-border);
-      background: #030712; color: #fff; margin-bottom: 16px; box-sizing: border-box; font-family: var(--font);
+    .container {
+      width: 100%;
+      max-width: 1360px;
+      margin: 8px auto 32px auto;
+      padding: 0 24px;
+      flex: 1;
+      box-sizing: border-box;
     }
-    input[type="text"]:focus, input[type="password"]:focus { outline: none; border-color: var(--accent); }
-    .badge-tag {
-      padding: 4px 10px; border-radius: 999px; font-size: 0.72rem; font-weight: 800; text-transform: uppercase;
+    .bento-card {
+      background: var(--card-bg);
+      border-radius: var(--radius-bento);
+      border: 1px solid var(--card-border);
+      box-shadow: var(--card-shadow);
+      padding: 24px;
+      box-sizing: border-box;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .bento-card:hover {
+      box-shadow: var(--card-shadow-hover);
+    }
+    .bento-dark-card {
+      background: var(--charcoal);
+      color: #ffffff;
+      border-radius: var(--radius-bento);
+      border: 1px solid var(--charcoal-border);
+      box-shadow: 0 20px 30px -10px rgba(0, 0, 0, 0.15);
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    .btn-yellow {
+      background: var(--yellow);
+      color: var(--charcoal);
+      font-weight: 700;
+      font-size: 0.88rem;
+      border: none;
+      border-radius: var(--radius-pill);
+      padding: 10px 20px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.15s ease;
+      text-decoration: none;
+      box-shadow: 0 2px 8px rgba(250, 204, 21, 0.35);
+    }
+    .btn-yellow:hover {
+      background: var(--yellow-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(250, 204, 21, 0.45);
+    }
+    .btn-charcoal {
+      background: var(--charcoal);
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 0.88rem;
+      border: none;
+      border-radius: var(--radius-pill);
+      padding: 10px 20px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.15s ease;
+      text-decoration: none;
+    }
+    .btn-charcoal:hover {
+      background: var(--charcoal-hover);
+      transform: translateY(-1px);
+    }
+    .btn-ghost {
+      background: #f4f4f5;
+      color: var(--text-primary);
+      font-weight: 600;
+      font-size: 0.86rem;
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius-pill);
+      padding: 9px 18px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.15s ease;
+      text-decoration: none;
+    }
+    .btn-ghost:hover {
+      background: #e4e4e7;
+    }
+    .btn-mode-pill {
+      background: #f4f4f5;
+      color: var(--text-primary);
+      font-weight: 700;
+      font-size: 0.84rem;
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius-pill);
+      padding: 8px 18px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .btn-mode-pill:hover {
+      background: #e4e4e7;
+    }
+    .btn-mode-pill.active {
+      background: var(--yellow);
+      color: var(--charcoal);
+      border-color: var(--yellow);
+      box-shadow: 0 2px 8px rgba(250, 204, 21, 0.35);
+    }
+    .stat-figure {
+      font-size: 2.5rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--text-primary);
+      line-height: 1.1;
+      margin: 8px 0 4px 0;
+    }
+    .stat-label {
+      font-size: 0.76rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+    }
+    .pill-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: var(--radius-pill);
+      font-size: 0.76rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .pill-yellow {
+      background: var(--yellow-subtle);
+      color: #854d0e;
+      border: 1px solid rgba(250, 204, 21, 0.4);
+    }
+    .pill-charcoal {
+      background: var(--charcoal);
+      color: #ffffff;
+    }
+    .pill-gray {
+      background: #f4f4f5;
+      color: var(--text-secondary);
+      border: 1px solid var(--card-border);
     }
     .alert-box {
-      padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 0.88rem; font-weight: 600;
+      padding: 14px 18px;
+      border-radius: 14px;
+      margin-bottom: 20px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
-    .alert-success { background: rgba(0, 255, 198, 0.15); color: var(--accent); border: 1px solid var(--accent); }
-    .alert-danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid var(--accent-red); }
+    .alert-success {
+      background: rgba(16, 185, 129, 0.1);
+      color: #065f46;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .alert-danger {
+      background: rgba(239, 68, 68, 0.1);
+      color: #991b1b;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      padding: 13px 16px;
+      border-radius: 14px;
+      border: 1px solid var(--card-border);
+      background: #ffffff;
+      color: var(--text-primary);
+      margin-bottom: 16px;
+      box-sizing: border-box;
+      font-family: inherit;
+      font-size: 0.92rem;
+      transition: all 0.15s ease;
+    }
+    input[type="text"]:focus, input[type="password"]:focus {
+      outline: none;
+      border-color: var(--yellow);
+      box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.25);
+    }
   </style>
 </head>
 <body>
-  <div class="navbar">
-    <a href="/" class="logo">
-      <span>⚡ SISYPHUS AI</span>
-      <span class="logo-badge">Smart Form Coach</span>
-    </a>
-    <div class="nav-links">
-      {% if current_user.is_authenticated %}
-        <span style="font-size: 0.84rem; color: var(--accent); font-weight: 700;">👤 {{ current_user.username }}</span>
-        <a href="/workout">🏋️ Live Workout</a>
-        <a href="/dashboard">📊 Dashboard</a>
-        <a href="/logout" style="color: var(--accent-red);">Logout</a>
-      {% else %}
-        <a href="/workout">🏋️ Live Workout</a>
-        <a href="/login">Login</a>
-        <a href="/register" style="background: var(--accent); color: #000; font-weight: 700;">Register</a>
-      {% endif %}
+  <div class="navbar-container">
+    <div class="navbar-floating">
+      <a href="/" class="logo-text">
+        <span>Sisyphus</span>
+        <span class="logo-dot"></span>
+        <span class="logo-badge">Smart Form</span>
+      </a>
+
+      <div class="nav-pills">
+        {% if current_user.is_authenticated %}
+          <a href="/dashboard" class="nav-pill active">📊 Dashboard</a>
+          <a href="/workout" class="nav-pill">🏋️ Live Workout</a>
+          <a href="/logout" class="nav-pill" style="color: var(--accent-red);">Logout</a>
+        {% else %}
+          <a href="/login" class="nav-pill active">Login</a>
+          <a href="/register" class="nav-pill">Register</a>
+        {% endif %}
+      </div>
+
+      <div class="user-badge-wrap">
+        {% if current_user.is_authenticated %}
+          <div class="user-avatar">{{ current_user.username[0]|upper }}</div>
+          <div>
+            <div style="font-size: 0.86rem; font-weight: 700; color: var(--text-primary); line-height: 1.2;">
+              {{ current_user.username }}
+            </div>
+            <div style="font-size: 0.72rem; color: var(--text-secondary); font-weight: 600;">
+              Level {{ current_user.level }}
+            </div>
+          </div>
+        {% else %}
+          <a href="/register" class="btn-yellow" style="padding: 7px 16px; font-size: 0.8rem;">Join Sisyphus</a>
+        {% endif %}
+      </div>
     </div>
   </div>
 
@@ -1068,7 +1547,10 @@ LAYOUT_SHELL = """
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
         {% for category, message in messages %}
-          <div class="alert-box alert-{{ category }}">{{ message }}</div>
+          <div class="alert-box alert-{{ category }}">
+            <span>⚡</span>
+            <span>{{ message }}</span>
+          </div>
         {% endfor %}
       {% endif %}
     {% endwith %}
@@ -1079,102 +1561,127 @@ LAYOUT_SHELL = """
 </html>
 """
 
+
 def render_layout(content, **kwargs):
     html = LAYOUT_SHELL.replace("<!--BODY_CONTENT-->", content)
     return render_template_string(html, **kwargs)
 
 
 WORKOUT_BODY = """
-<div style="display: grid; grid-template-columns: 1fr 380px; gap: 20px;">
-  <!-- Video Feed & Setup -->
-  <div class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
-    <div style="position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 10px; overflow: hidden; border: 1px solid var(--card-border); display: flex; align-items: center; justify-content: center;">
+<div style="display: grid; grid-template-columns: 1fr 390px; gap: 24px;">
+  <!-- Video Feed & Bento Setup Card -->
+  <div class="bento-card" style="padding: 24px; display: flex; flex-direction: column; gap: 18px;">
+    <!-- Encapsulated Video Feed -->
+    <div style="position: relative; width: 100%; aspect-ratio: 16 / 9; background: #09090b; border-radius: 16px; overflow: hidden; border: 1px solid var(--card-border); box-shadow: inset 0 2px 8px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center;">
       <img id="video-feed-img" src="/video_feed" alt="MediaPipe Tracking Feed" style="width: 100%; height: 100%; object-fit: contain; display: block;" />
     </div>
 
-    <!-- Toolbar -->
-    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <label for="exercise-select" style="font-size: 0.82rem; font-weight: 700; color: var(--subtext);">Exercise:</label>
-        <select id="exercise-select" class="custom-select">
-          <option value="squat" selected>Squats (Hip-Knee-Ankle)</option>
-          <option value="pushup">Push-Ups (Chest & Spine)</option>
-          <option value="curl">Dumbbell Curls (Shoulder-Elbow-Wrist)</option>
+    <!-- Mode Selector Bar (Warm Yellow Buttons & Pills) -->
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; background: #fbfbfb; padding: 14px 18px; border-radius: 16px; border: 1px solid var(--card-border);">
+      <div>
+        <div style="font-size: 0.74rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">Exercise Mode</div>
+        <div class="exercise-pill-group" style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button type="button" class="btn-mode-pill active" data-exercise="squat">🏋️ Squats</button>
+          <button type="button" class="btn-mode-pill" data-exercise="pushup">💪 Push-ups</button>
+          <button type="button" class="btn-mode-pill" data-exercise="curl">⚡ Dumbbell Curls</button>
+        </div>
+        <!-- Hidden select for compatibility -->
+        <select id="exercise-select" style="display:none;">
+          <option value="squat" selected>Squats</option>
+          <option value="pushup">Push-Ups</option>
+          <option value="curl">Dumbbell Curls</option>
         </select>
       </div>
 
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <label for="source-select" style="font-size: 0.82rem; font-weight: 700; color: var(--subtext);">Input:</label>
-        <select id="source-select" class="custom-select">
-          <option value="demo" selected>📹 Demo Video Engine</option>
-          <option value="webcam">🎥 Live Webcam (cv2.VideoCapture(0))</option>
-          <option value="browser_cam">💻 Browser Camera (getUserMedia)</option>
-        </select>
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <div>
+          <div style="font-size: 0.74rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">Video Source</div>
+          <select id="source-select" class="btn-ghost" style="padding: 7px 14px; font-weight: 600; cursor: pointer; outline: none;">
+            <option value="demo" selected>📹 Demo Video Engine</option>
+            <option value="webcam">🎥 Live Webcam (cv2.VideoCapture(0))</option>
+            <option value="browser_cam">💻 Browser Camera (getUserMedia)</option>
+          </select>
+        </div>
+
+        <div style="align-self: flex-end;">
+          <button id="btn-pause-camera" class="btn-ghost" style="padding: 8px 16px;">
+            <span id="pause-icon">⏸️</span> <span id="pause-text">Pause Camera</span>
+          </button>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- Live Stats & Smart Coach Feedback -->
-  <div style="display: flex; flex-direction: column; gap: 16px;">
-    <!-- Reps Counter Card -->
-    <div class="card" style="background: linear-gradient(145deg, #131b2e, #0f1624); border: 1px solid #1f293d;">
+  <!-- Live Stats Bento Panel -->
+  <div style="display: flex; flex-direction: column; gap: 18px;">
+    <!-- Reps Counter Bento Hero Card -->
+    <div class="bento-card" style="background: linear-gradient(135deg, #18181b, #09090b); color: #ffffff; border: 1px solid #27272a; position: relative; overflow: hidden;">
+      <div style="position: absolute; top: -20px; right: -20px; width: 100px; height: 100px; background: rgba(250, 204, 21, 0.15); border-radius: 50%; pointer-events: none;"></div>
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-size: 0.78rem; font-weight: 800; color: var(--subtext); text-transform: uppercase;">Repetitions</span>
-        <span id="phase-badge" class="badge-tag" style="background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent);">UP</span>
+        <span style="font-size: 0.78rem; font-weight: 800; color: #a1a1aa; text-transform: uppercase; letter-spacing: 0.05em;">Repetitions</span>
+        <span id="phase-badge" class="pill-tag pill-yellow">UP</span>
       </div>
-      <div class="stat-val" id="reps-num" style="font-size: 4.2rem; line-height: 1; margin: 12px 0;">0</div>
-      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; color: var(--subtext); border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px;">
-        <span>Session Time: <strong id="session-timer-text" style="color: var(--accent); font-family: var(--mono);">00:00</strong></span>
-        <span id="active-side-text">Right Side</span>
+      <div class="stat-figure" id="reps-num" style="color: #facc15; font-size: 4.6rem; margin: 12px 0; font-family: 'JetBrains Mono', monospace; line-height: 1;">0</div>
+      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; color: #a1a1aa; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
+        <span>Session Time: <strong id="session-timer-text" style="color: #ffffff; font-family: 'JetBrains Mono', monospace;">00:00</strong></span>
+        <span id="active-side-text">Right Leg</span>
       </div>
     </div>
 
-    <!-- Joint Angles -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-      <div class="card" style="padding: 16px;">
-        <span style="font-size: 0.74rem; font-weight: 800; color: var(--subtext); text-transform: uppercase;" id="primary-angle-label">Knee Angle</span>
-        <div class="stat-val" id="primary-angle-val" style="font-size: 1.8rem;">180°</div>
+    <!-- Joint Angles Bento Grid -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+      <div class="bento-card" style="padding: 16px;">
+        <span class="stat-label" id="primary-angle-label">Knee Angle</span>
+        <div class="stat-figure" id="primary-angle-val" style="font-size: 1.8rem; margin: 4px 0 0 0;">180°</div>
       </div>
-      <div class="card" style="padding: 16px;">
-        <span style="font-size: 0.74rem; font-weight: 800; color: var(--subtext); text-transform: uppercase;" id="secondary-angle-label">Target Angle</span>
-        <div class="stat-val" id="secondary-angle-val" style="font-size: 1.8rem;">≤ 100°</div>
+      <div class="bento-card" style="padding: 16px;">
+        <span class="stat-label" id="secondary-angle-label">Target Angle</span>
+        <div class="stat-figure" id="secondary-angle-val" style="font-size: 1.8rem; margin: 4px 0 0 0; color: #854d0e;">≤ 100°</div>
       </div>
     </div>
 
     <!-- Form Score Card -->
-    <div class="card" style="padding: 16px;">
+    <div class="bento-card" style="padding: 18px;">
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-size: 0.76rem; font-weight: 800; color: var(--subtext); text-transform: uppercase;">Form Quality Score</span>
-        <span class="stat-val" id="score-val" style="font-size: 1.6rem; margin: 0;">100%</span>
+        <span class="stat-label">Form Quality Score</span>
+        <span class="stat-figure" id="score-val" style="font-size: 1.6rem; margin: 0; color: var(--text-primary);">100%</span>
       </div>
-      <div style="width: 100%; height: 7px; background: rgba(0,0,0,0.5); border-radius: 999px; overflow: hidden; margin-top: 10px;">
-        <div id="score-bar" style="width: 100%; height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.3s ease;"></div>
+      <div style="width: 100%; height: 8px; background: #f4f4f5; border-radius: 9999px; overflow: hidden; margin-top: 10px; border: 1px solid #e5e7eb;">
+        <div id="score-bar" style="width: 100%; height: 100%; background: #facc15; border-radius: 9999px; transition: width 0.3s ease;"></div>
       </div>
     </div>
 
-    <!-- Smart Vocal Feedback Banner -->
-    <div class="card" id="feedback-banner" style="background: rgba(0, 255, 198, 0.08); border-color: rgba(0, 255, 198, 0.3); display: flex; align-items: center; gap: 12px; padding: 14px;">
-      <div id="feedback-avatar" style="width: 38px; height: 38px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 1.1rem; color: #000; flex-shrink: 0;">🗣️</div>
+    <!-- Smart Vocal Feedback Bento Banner -->
+    <div class="bento-card" id="feedback-banner" style="background: rgba(250, 204, 21, 0.12); border-color: rgba(250, 204, 21, 0.4); display: flex; align-items: center; gap: 14px; padding: 16px;">
+      <div id="feedback-avatar" style="width: 40px; height: 40px; border-radius: 50%; background: #facc15; display: flex; align-items: center; justify-content: center; font-size: 1.15rem; color: #18181b; flex-shrink: 0; box-shadow: 0 2px 6px rgba(250, 204, 21, 0.3);">🗣️</div>
       <div>
-        <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--subtext); font-weight: 700;">Smart Form Coach</div>
-        <div id="feedback-message" style="font-size: 0.92rem; font-weight: 700; color: #fff; margin-top: 2px;">Ready - Position body in frame</div>
+        <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-secondary); font-weight: 700; letter-spacing: 0.04em;">Smart Form Coach</div>
+        <div id="feedback-message" style="font-size: 0.92rem; font-weight: 700; color: var(--text-primary); margin-top: 2px;">Ready - Position body in frame</div>
       </div>
     </div>
 
     <!-- Action Buttons -->
     <div style="display: flex; gap: 10px; flex-direction: column;">
+      <!-- Initial user interaction trigger to unlock browser audio autoplay restrictions -->
+      <button type="button" id="btn-start-session" class="btn-yellow" style="width: 100%; padding: 12px; font-size: 0.9rem; display: flex; align-items: center; justify-content: center; gap: 8px;">
+        <span>▶️</span> <span>Start Session / Enable Audio</span>
+      </button>
+
       <form action="/save_workout" method="POST" id="workout-save-form">
         <input type="hidden" name="exercise_type" id="hidden-exercise-type" value="Squats">
-        <button type="submit" class="btn" style="width: 100%; padding: 12px;">
+        <input type="hidden" name="rep_count" id="hidden-rep-count" value="0">
+        <input type="hidden" name="total_duration_seconds" id="hidden-duration" value="0">
+        <input type="hidden" name="avg_form_accuracy" id="hidden-accuracy" value="100">
+        <button type="submit" class="btn-charcoal" style="width: 100%; padding: 13px; font-size: 0.92rem; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
           💾 Finish & Save Workout
         </button>
       </form>
 
       <div style="display: flex; gap: 10px;">
-        <button id="btn-voice-toggle" class="btn btn-voice" style="flex: 1;">
+        <button id="btn-voice-toggle" class="btn-ghost" style="flex: 1;">
           <span id="voice-icon">🎙️</span> <span id="voice-label">Vocal: ON (Errors Only)</span>
         </button>
-        <button id="btn-reset" class="btn btn-secondary" style="flex: 1;">
+        <button id="btn-reset" class="btn-ghost" style="flex: 1;">
           🔄 Reset Reps
         </button>
       </div>
@@ -1189,10 +1696,15 @@ WORKOUT_BODY = """
   let voiceEnabled = true;
   let lastSpokenTime = 0;
   let lastRepCount = 0;
+  let currentDuration = 0;
+  let currentAccuracy = 100;
+  let lastAlertTimestamp = Date.now() / 1000;
+  let audioUnlocked = false;
   let currentInputSource = "demo";
   let isCapturing = false;
   let webcamStream = null;
   let currentBlobUrl = null;
+  let isCameraPaused = false;
 
   const repsEl = document.getElementById("reps-num");
   const phaseBadgeEl = document.getElementById("phase-badge");
@@ -1217,6 +1729,15 @@ WORKOUT_BODY = """
   const captureCanvas = document.getElementById("capture-canvas");
   const captureCtx = captureCanvas.getContext("2d");
   const hiddenExerciseType = document.getElementById("hidden-exercise-type");
+  const hiddenRepCount = document.getElementById("hidden-rep-count");
+  const hiddenDuration = document.getElementById("hidden-duration");
+  const hiddenAccuracy = document.getElementById("hidden-accuracy");
+  const btnPauseCamera = document.getElementById("btn-pause-camera");
+  const pauseIcon = document.getElementById("pause-icon");
+  const pauseText = document.getElementById("pause-text");
+  const modePills = document.querySelectorAll(".btn-mode-pill");
+  const btnStartSession = document.getElementById("btn-start-session");
+  const workoutSaveForm = document.getElementById("workout-save-form");
 
   function formatTime(totalSec) {
     const s = Math.floor(totalSec || 0);
@@ -1225,59 +1746,144 @@ WORKOUT_BODY = """
     return (mins < 10 ? "0" : "") + mins + ":" + (secs < 10 ? "0" : "") + secs;
   }
 
-  // ----------------------------------------------------
-  // SMART VOCAL FEEDBACK ENGINE:
-  // - Speaks ONLY on specific form errors (warn_*)
-  //   * Squats: 'Squat deeper!' or 'Keep your knees out!'
-  //   * Push-ups: 'Lower your chest!' or 'Raise your hips!'
-  //   * Dumbbell Curls: 'Keep your elbows tucked!'
-  // - SILENT during good form, starting position, and successful rep counts
-  // - Strict 4-second delay throttle between alerts
-  // ----------------------------------------------------
+  // Unlock browser Web Speech API autoplay restrictions upon user interaction
+  function unlockAudio() {
+    if (!audioUnlocked && window.speechSynthesis) {
+      try {
+        const dummy = new SpeechSynthesisUtterance("");
+        dummy.volume = 0;
+        window.speechSynthesis.speak(dummy);
+        audioUnlocked = true;
+        if (btnStartSession) {
+          btnStartSession.innerHTML = "<span>🔊</span> <span>Voice Audio Active</span>";
+          btnStartSession.className = "btn-ghost";
+          btnStartSession.style.color = "#18181b";
+        }
+      } catch (err) {
+        console.warn("SpeechSynthesis unlock note:", err);
+      }
+    }
+  }
+
+  if (btnStartSession) {
+    btnStartSession.addEventListener("click", () => {
+      unlockAudio();
+      speakFormError("Session started. Audio feedback enabled.");
+    });
+  }
+  document.addEventListener("click", unlockAudio);
+
+  // Client-side Web Speech API playback with 4-second delay throttle
   function speakFormError(errorMessage) {
     if (!voiceEnabled || !window.speechSynthesis || !errorMessage) return;
     const now = Date.now();
-    if (now - lastSpokenTime < 4000) return; // Strict 4-second debounce
+    if (now - lastSpokenTime < 4000) return;
 
-    window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(errorMessage);
-    utter.rate = 1.05;
-    utter.pitch = 1.0;
-    window.speechSynthesis.speak(utter);
-    lastSpokenTime = now;
+    try {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(errorMessage);
+      utter.rate = 1.05;
+      utter.pitch = 1.0;
+      utter.lang = "en-US";
+      window.speechSynthesis.speak(utter);
+      lastSpokenTime = now;
+    } catch (e) {
+      console.warn("SpeechSynthesis error:", e);
+    }
+  }
+
+  // Poll lightweight endpoint /api/audio_alert every 500ms
+  async function pollAudioAlert() {
+    try {
+      const res = await fetch("/api/audio_alert");
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.alert && data.timestamp && data.timestamp > lastAlertTimestamp) {
+          lastAlertTimestamp = data.timestamp;
+          speakFormError(data.alert);
+        }
+      }
+    } catch (e) {}
+  }
+  setInterval(pollAudioAlert, 500);
+
+  if (workoutSaveForm) {
+    workoutSaveForm.addEventListener("submit", () => {
+      if (hiddenRepCount) hiddenRepCount.value = lastRepCount;
+      if (hiddenDuration) hiddenDuration.value = currentDuration;
+      if (hiddenAccuracy) hiddenAccuracy.value = currentAccuracy;
+    });
   }
 
   btnVoiceToggle.addEventListener("click", () => {
     voiceEnabled = !voiceEnabled;
     if (voiceEnabled) {
-      btnVoiceToggle.className = "btn btn-voice";
+      btnVoiceToggle.className = "btn-ghost";
       voiceLabel.textContent = "Vocal: ON (Errors Only)";
     } else {
-      btnVoiceToggle.className = "btn btn-voice muted";
+      btnVoiceToggle.className = "btn-ghost";
+      btnVoiceToggle.style.color = "var(--accent-red)";
       voiceLabel.textContent = "Vocal: MUTED";
       if (window.speechSynthesis) window.speechSynthesis.cancel();
+    }
+  });
+
+  // Pause / Resume camera resource handling
+  btnPauseCamera.addEventListener("click", async () => {
+    isCameraPaused = !isCameraPaused;
+    if (isCameraPaused) {
+      pauseIcon.textContent = "▶️";
+      pauseText.textContent = "Resume Camera";
+      btnPauseCamera.className = "btn-ghost";
+      await fetch("/pause_feed", { method: "POST" });
+      videoFeedImg.src = "";
+    } else {
+      pauseIcon.textContent = "⏸️";
+      pauseText.textContent = "Pause Camera";
+      btnPauseCamera.className = "btn-ghost";
+      await fetch("/resume_feed", { method: "POST" });
+      videoFeedImg.src = "/video_feed?t=" + Date.now();
+    }
+  });
+
+  // Ensure camera VideoCapture resource releases properly when leaving or pausing /workout
+  window.addEventListener("pagehide", () => {
+    navigator.sendBeacon("/pause_feed");
+  });
+  window.addEventListener("beforeunload", () => {
+    navigator.sendBeacon("/pause_feed");
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      navigator.sendBeacon("/pause_feed");
     }
   });
 
   function updateTelemetry(data) {
     if (!data) return;
 
-    // Reps update VISUALLY only (speech synthesis remains silent on reps)
     if (data.reps !== lastRepCount) {
       lastRepCount = data.reps;
       repsEl.textContent = data.reps;
-      repsEl.style.transform = "scale(1.2)";
+      repsEl.style.transform = "scale(1.15)";
       setTimeout(() => { repsEl.style.transform = "scale(1)"; }, 180);
     } else {
       repsEl.textContent = data.reps;
     }
 
     if (data.duration_seconds !== undefined) {
+      currentDuration = data.duration_seconds;
       sessionTimerEl.textContent = formatTime(data.duration_seconds);
+    }
+    if (data.avg_form_accuracy !== undefined) {
+      currentAccuracy = data.avg_form_accuracy;
+    } else if (data.form_score !== undefined) {
+      currentAccuracy = data.form_score;
     }
 
     const isDown = data.stage === "down";
     phaseBadgeEl.textContent = isDown ? "DOWN" : "UP";
+    phaseBadgeEl.className = isDown ? "pill-tag pill-yellow" : "pill-tag pill-gray";
 
     if (data.exercise === "squat") {
       primaryAngleLabel.textContent = "Knee Angle";
@@ -1305,13 +1911,15 @@ WORKOUT_BODY = """
 
     feedbackMsg.textContent = data.feedback;
     if (data.warnings && data.warnings.length > 0) {
-      feedbackBanner.style.background = "rgba(239, 68, 68, 0.12)";
-      feedbackBanner.style.borderColor = "rgba(239, 68, 68, 0.4)";
+      feedbackBanner.style.background = "rgba(239, 68, 68, 0.1)";
+      feedbackBanner.style.borderColor = "rgba(239, 68, 68, 0.3)";
       feedbackAvatar.style.background = "var(--accent-red)";
+      feedbackAvatar.style.color = "#ffffff";
     } else {
-      feedbackBanner.style.background = "rgba(0, 255, 198, 0.08)";
-      feedbackBanner.style.borderColor = "rgba(0, 255, 198, 0.3)";
-      feedbackAvatar.style.background = "var(--accent)";
+      feedbackBanner.style.background = "rgba(250, 204, 21, 0.12)";
+      feedbackBanner.style.borderColor = "rgba(250, 204, 21, 0.4)";
+      feedbackAvatar.style.background = "#facc15";
+      feedbackAvatar.style.color = "#18181b";
     }
 
     // Trigger speech ONLY on specific form errors with 4s debounce
@@ -1321,7 +1929,7 @@ WORKOUT_BODY = """
   }
 
   async function pollStatus() {
-    if (currentInputSource === "browser_cam") return;
+    if (currentInputSource === "browser_cam" || isCameraPaused) return;
     try {
       const res = await fetch("/status");
       if (res.ok) {
@@ -1332,22 +1940,31 @@ WORKOUT_BODY = """
   }
   setInterval(pollStatus, 250);
 
-  exerciseSelect.addEventListener("change", async () => {
-    const selected = exerciseSelect.value;
-    if (selected === 'squat') {
-      hiddenExerciseType.value = 'Squats';
-    } else if (selected === 'pushup') {
-      hiddenExerciseType.value = 'Push-Ups';
-    } else {
-      hiddenExerciseType.value = 'Dumbbell Curls';
-    }
+  // Exercise Mode switching using Bento Pills
+  modePills.forEach(pill => {
+    pill.addEventListener("click", async () => {
+      modePills.forEach(p => p.classList.remove("active"));
+      pill.classList.add("active");
+      const selected = pill.getAttribute("data-exercise");
+      exerciseSelect.value = selected;
 
-    await fetch("/set_exercise", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ exercise: selected })
+      if (selected === 'squat') {
+        hiddenExerciseType.value = 'Squats';
+      } else if (selected === 'pushup') {
+        hiddenExerciseType.value = 'Push-Ups';
+      } else {
+        hiddenExerciseType.value = 'Dumbbell Curls';
+      }
+
+      await fetch("/set_exercise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ exercise: selected })
+      });
+      if (!isCameraPaused) {
+        videoFeedImg.src = "/video_feed?t=" + Date.now();
+      }
     });
-    videoFeedImg.src = "/video_feed?t=" + Date.now();
   });
 
   sourceSelect.addEventListener("change", async () => {
@@ -1400,7 +2017,9 @@ WORKOUT_BODY = """
         body: JSON.stringify({ source: selected })
       });
       const data = await res.json();
-      videoFeedImg.src = "/video_feed?t=" + Date.now();
+      if (!isCameraPaused) {
+        videoFeedImg.src = "/video_feed?t=" + Date.now();
+      }
       if (selected === "webcam" && data.source === "demo") {
         alert("Physical webcam device 0 is unavailable. Falling back to demo video.");
         sourceSelect.value = "demo";
@@ -1421,13 +2040,13 @@ WORKOUT_BODY = """
     if (clientWebcam.readyState >= 2) {
       const vw = clientWebcam.videoWidth || 640;
       const vh = clientWebcam.videoHeight || 480;
-      captureCanvas.width = vw;
-      captureCanvas.height = vh;
+      captureCanvas.width = 640;
+      captureCanvas.height = 480;
 
       captureCtx.save();
-      captureCtx.translate(vw, 0);
+      captureCtx.translate(640, 0);
       captureCtx.scale(-1, 1);
-      captureCtx.drawImage(clientWebcam, 0, 0, vw, vh);
+      captureCtx.drawImage(clientWebcam, 0, 0, 640, 480);
       captureCtx.restore();
 
       captureCanvas.toBlob(async (blob) => {
@@ -1463,7 +2082,7 @@ WORKOUT_BODY = """
         if (isCapturing && currentInputSource === "browser_cam") {
           requestAnimationFrame(runCameraCaptureLoop);
         }
-      }, "image/jpeg", 0.8);
+      }, "image/jpeg", 0.65);
 
     } else {
       requestAnimationFrame(runCameraCaptureLoop);
@@ -1473,77 +2092,220 @@ WORKOUT_BODY = """
 """
 
 DASHBOARD_BODY = """
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px;">
-  <div class="card">
-    <div class="stat-sub">TOTAL REPS COMPLETED</div>
-    <div class="stat-val">{{ total_reps }}</div>
-    <div class="stat-sub">Across all exercises</div>
-  </div>
-  <div class="card">
-    <div class="stat-sub">TOTAL WORKOUTS</div>
-    <div class="stat-val" style="color: #fff;">{{ total_workouts }}</div>
-    <div class="stat-sub">Completed sessions</div>
-  </div>
-  <div class="card">
-    <div class="stat-sub">ACTIVE TIME</div>
-    <div class="stat-val" style="color: var(--accent-blue);">{{ total_duration | format_duration }}</div>
-    <div class="stat-sub">Under exercise tracking</div>
-  </div>
-  <div class="card">
-    <div class="stat-sub">AVERAGE FORM</div>
-    <div class="stat-val" style="color: var(--accent-amber);">{{ avg_form }}%</div>
-    <div class="stat-sub">Movement accuracy</div>
-  </div>
-</div>
-
-<div class="card" style="margin-bottom: 24px;">
-  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-    <div>
-      <h3 style="font-size: 1.15rem; font-weight: 800; color: #fff;">Daily Rep Volume Over Time</h3>
-      <p style="font-size: 0.78rem; color: var(--subtext);">Historical progress across logged workouts</p>
+<!-- Greeting & Header Layout -->
+<div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;">
+  <div>
+    <h1 style="font-size: 2.1rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.03em; margin-bottom: 8px;">
+      Welcome back, {{ current_user.username }} 👋
+    </h1>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+      <span class="pill-tag pill-charcoal">⚡ Level {{ user_level }} Athlete</span>
+      <span class="pill-tag pill-yellow">Squats {{ squat_pct }}%</span>
+      <span class="pill-tag pill-gray">Push-ups {{ pushup_pct }}%</span>
+      <span class="pill-tag pill-gray">Curls {{ curl_pct }}%</span>
     </div>
-    <span class="badge-tag" style="background: var(--accent-dim); color: var(--accent);">Activity</span>
   </div>
-  <div style="height: 300px; width: 100%;">
-    <canvas id="progressChart"></canvas>
+
+  <!-- Top-Right Key Metrics -->
+  <div style="display: flex; gap: 24px; align-items: center; background: #ffffff; padding: 12px 24px; border-radius: var(--radius-bento); border: 1px solid var(--card-border); box-shadow: var(--card-shadow);">
+    <div>
+      <div class="stat-label">Level</div>
+      <div style="font-size: 1.6rem; font-weight: 800; color: var(--text-primary); font-family: 'JetBrains Mono', monospace;">{{ user_level }}</div>
+    </div>
+    <div style="width: 1px; height: 32px; background: #e5e7eb;"></div>
+    <div>
+      <div class="stat-label">Total Reps</div>
+      <div style="font-size: 1.6rem; font-weight: 800; color: #854d0e; font-family: 'JetBrains Mono', monospace;">{{ total_reps }}</div>
+    </div>
+    <div style="width: 1px; height: 32px; background: #e5e7eb;"></div>
+    <div>
+      <div class="stat-label">Experience</div>
+      <div style="font-size: 1.6rem; font-weight: 800; color: var(--text-primary); font-family: 'JetBrains Mono', monospace;">{{ user_exp }} <span style="font-size: 0.9rem; color: var(--text-secondary);">XP</span></div>
+    </div>
   </div>
 </div>
 
-<div class="card">
-  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-    <h3 style="font-size: 1.15rem; font-weight: 800; color: #fff;">Recent Exercise Sessions</h3>
-    <a href="/workout" class="btn" style="padding: 6px 14px; font-size: 0.8rem;">Start New Workout</a>
+<!-- Bento Grid Row 1: Profile & 4 Key Stat Cards -->
+<div style="display: grid; grid-template-columns: repeat(12, 1fr); gap: 20px; margin-bottom: 20px;">
+  <!-- User Gamer Profile Card (4 Columns) -->
+  <div class="bento-card" style="grid-column: span 4; display: flex; flex-direction: column; justify-content: space-between;">
+    <div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <span class="pill-tag pill-yellow">Gamer Profile</span>
+        <span style="font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);">Tier {{ user_level }}</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 18px;">
+        <div style="width: 52px; height: 52px; border-radius: 16px; background: #18181b; color: #facc15; font-size: 1.5rem; font-weight: 800; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(24, 24, 27, 0.2);">
+          {{ current_user.username[0]|upper }}
+        </div>
+        <div>
+          <div style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary);">{{ current_user.username }}</div>
+          <div style="font-size: 0.8rem; color: var(--text-secondary); font-weight: 600;">Sisyphus Form Master</div>
+        </div>
+      </div>
+
+      <!-- EXP Progress Bar -->
+      <div style="margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 700; margin-bottom: 6px;">
+          <span style="color: var(--text-secondary);">Level Progress</span>
+          <span style="color: #854d0e; font-family: 'JetBrains Mono', monospace;">{{ exp_in_level }} / 100 XP</span>
+        </div>
+        <div style="width: 100%; height: 10px; background: #f4f4f5; border-radius: 9999px; overflow: hidden; border: 1px solid #e5e7eb;">
+          <div style="width: {{ exp_progress_pct }}%; height: 100%; background: linear-gradient(90deg, #facc15, #18181b); border-radius: 9999px; transition: width 0.4s ease;"></div>
+        </div>
+        <div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 5px;">{{ 100 - exp_in_level }} XP needed for Level {{ user_level + 1 }}</div>
+      </div>
+    </div>
+
+    <div>
+      <a href="/workout" class="btn-yellow" style="width: 100%; box-sizing: border-box;">
+        🏋️ Start Workout Now
+      </a>
+    </div>
+  </div>
+
+  <!-- 4 Stat Metric Cards (8 Columns) -->
+  <div style="grid-column: span 8; display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+    <div class="bento-card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="stat-label">TOTAL REPS COMPLETED</div>
+        <div style="width: 32px; height: 32px; border-radius: 50%; background: var(--yellow-subtle); display: flex; align-items: center; justify-content: center; font-size: 0.95rem;">⚡</div>
+      </div>
+      <div class="stat-figure">{{ total_reps }}</div>
+      <div style="font-size: 0.8rem; color: var(--text-secondary);">Across all exercises</div>
+    </div>
+
+    <div class="bento-card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="stat-label">TOTAL WORKOUTS</div>
+        <div style="width: 32px; height: 32px; border-radius: 50%; background: #f4f4f5; display: flex; align-items: center; justify-content: center; font-size: 0.95rem;">📅</div>
+      </div>
+      <div class="stat-figure">{{ total_workouts }}</div>
+      <div style="font-size: 0.8rem; color: var(--text-secondary);">Completed sessions</div>
+    </div>
+
+    <div class="bento-card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="stat-label">ACTIVE TIME</div>
+        <div style="width: 32px; height: 32px; border-radius: 50%; background: #eff6ff; display: flex; align-items: center; justify-content: center; font-size: 0.95rem;">⏱️</div>
+      </div>
+      <div class="stat-figure" style="font-size: 2.1rem;">{{ total_duration | format_duration }}</div>
+      <div style="font-size: 0.8rem; color: var(--text-secondary);">Under exercise tracking</div>
+    </div>
+
+    <div class="bento-card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="stat-label">AVERAGE FORM</div>
+        <div style="width: 32px; height: 32px; border-radius: 50%; background: #fefce8; display: flex; align-items: center; justify-content: center; font-size: 0.95rem;">🎯</div>
+      </div>
+      <div class="stat-figure" style="color: #854d0e;">{{ avg_form }}%</div>
+      <div style="font-size: 0.8rem; color: var(--text-secondary);">Movement accuracy score</div>
+    </div>
+  </div>
+</div>
+
+<!-- Bento Grid Row 2: Analytics Bar Chart & Dark Quests Widget -->
+<div style="display: grid; grid-template-columns: repeat(12, 1fr); gap: 20px; margin-bottom: 20px;">
+  <!-- Progress Analytics Card (7 Columns) -->
+  <div class="bento-card" style="grid-column: span 7;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <div>
+        <h3 style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">Daily Rep Volume Over Time</h3>
+        <p style="font-size: 0.8rem; color: var(--text-secondary);">Minimalist volume analytics across sessions</p>
+      </div>
+      <span class="pill-tag pill-charcoal">Activity</span>
+    </div>
+    <div style="height: 290px; width: 100%;">
+      <canvas id="progressChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Quests & Badges Widget: High Contrast Dark Charcoal Card (5 Columns) -->
+  <div class="bento-dark-card" style="grid-column: span 5; display: flex; flex-direction: column; justify-content: space-between;">
+    <div>
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+        <div>
+          <h3 style="font-size: 1.15rem; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">🏆 Badges & Achievements</h3>
+          <p style="font-size: 0.78rem; color: #a1a1aa; margin-top: 2px;">Active milestones & training quests</p>
+        </div>
+        <span class="pill-tag pill-yellow" style="font-size: 0.7rem;">
+          {{ unlocked_count }}/{{ total_badge_count }} Completed
+        </span>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 10px; max-height: 270px; overflow-y: auto; padding-right: 4px;">
+        {% for b in badges %}
+          <div style="background: {% if b.unlocked %}rgba(250, 204, 21, 0.08){% else %}rgba(39, 39, 42, 0.5){% endif %}; border: 1px solid {% if b.unlocked %}rgba(250, 204, 21, 0.3){% else %}#27272a{% endif %}; border-radius: 14px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.35rem; width: 36px; height: 36px; border-radius: 10px; background: {% if b.unlocked %}rgba(250, 204, 21, 0.2){% else %}#27272a{% endif %}; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                {{ b.icon }}
+              </div>
+              <div>
+                <div style="font-size: 0.88rem; font-weight: 700; color: {% if b.unlocked %}#ffffff{% else %}#a1a1aa{% endif %};">{{ b.name }}</div>
+                <div style="font-size: 0.74rem; color: #71717a;">{{ b.description }}</div>
+              </div>
+            </div>
+            <div>
+              {% if b.unlocked %}
+                <span class="pill-tag" style="background: #facc15; color: #18181b; padding: 3px 8px; font-size: 0.68rem;">✓ UNLOCKED</span>
+              {% else %}
+                <span class="pill-tag" style="background: #27272a; color: #71717a; padding: 3px 8px; font-size: 0.68rem;">🔒 {{ b.requirement }}</span>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bento Grid Row 3: Recent Sessions Table -->
+<div class="bento-card">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+    <div>
+      <h3 style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">Recent Exercise Sessions</h3>
+      <p style="font-size: 0.8rem; color: var(--text-secondary);">Historical log of performed workouts</p>
+    </div>
+    <a href="/workout" class="btn-yellow" style="padding: 8px 18px; font-size: 0.84rem;">Start New Workout</a>
   </div>
 
   {% if sessions %}
     <div style="overflow-x: auto;">
       <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.88rem;">
         <thead>
-          <tr style="border-bottom: 1px solid var(--card-border); color: var(--subtext); font-size: 0.74rem; text-transform: uppercase;">
-            <th style="padding: 10px;">Date & Time</th>
-            <th style="padding: 10px;">Exercise</th>
-            <th style="padding: 10px;">Reps</th>
-            <th style="padding: 10px;">Duration</th>
-            <th style="padding: 10px;">Form Score</th>
+          <tr style="border-bottom: 2px solid #f4f4f5; color: var(--text-secondary); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em;">
+            <th style="padding: 12px 14px;">Date & Time</th>
+            <th style="padding: 12px 14px;">Exercise</th>
+            <th style="padding: 12px 14px;">Reps</th>
+            <th style="padding: 12px 14px;">Duration</th>
+            <th style="padding: 12px 14px;">Form Score</th>
           </tr>
         </thead>
         <tbody>
           {% for s in sessions %}
-            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-              <td style="padding: 12px 10px; font-family: var(--mono); color: var(--subtext); font-size: 0.8rem;">
+            <tr style="border-bottom: 1px solid #f4f4f5;">
+              <td style="padding: 14px; font-family: 'JetBrains Mono', monospace; color: var(--text-secondary); font-size: 0.82rem;">
                 {{ s.timestamp.strftime('%b %d, %Y - %H:%M') if s.timestamp else 'N/A' }}
               </td>
-              <td style="padding: 12px 10px; font-weight: 700;">
-                {{ s.exercise_type }}
+              <td style="padding: 14px;">
+                {% if 'squat' in s.exercise_type.lower() %}
+                  <span class="pill-tag pill-yellow">{{ s.exercise_type }}</span>
+                {% elif 'push' in s.exercise_type.lower() %}
+                  <span class="pill-tag" style="background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe;">{{ s.exercise_type }}</span>
+                {% else %}
+                  <span class="pill-tag pill-charcoal">{{ s.exercise_type }}</span>
+                {% endif %}
               </td>
-              <td style="padding: 12px 10px; font-family: var(--mono); font-weight: 800; color: var(--accent);">
+              <td style="padding: 14px; font-family: 'JetBrains Mono', monospace; font-weight: 800; color: var(--text-primary); font-size: 1rem;">
                 {{ s.rep_count }}
               </td>
-              <td style="padding: 12px 10px; font-family: var(--mono); color: var(--subtext);">
+              <td style="padding: 14px; font-family: 'JetBrains Mono', monospace; color: var(--text-secondary); font-size: 0.84rem;">
                 {{ s.total_duration_seconds | format_duration }}
               </td>
-              <td style="padding: 12px 10px; font-family: var(--mono); font-weight: 700; color: {% if s.avg_form_accuracy >= 80 %}var(--accent){% elif s.avg_form_accuracy >= 60 %}var(--accent-amber){% else %}var(--accent-red){% endif %};">
-                {{ s.avg_form_accuracy }}%
+              <td style="padding: 14px;">
+                <span class="pill-tag" style="{% if s.avg_form_accuracy >= 80 %}background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0;{% elif s.avg_form_accuracy >= 60 %}background: #fffbeb; color: #92400e; border: 1px solid #fde68a;{% else %}background: #fef2f2; color: #991b1b; border: 1px solid #fecaca;{% endif %}">
+                  {{ s.avg_form_accuracy }}%
+                </span>
               </td>
             </tr>
           {% endfor %}
@@ -1551,10 +2313,11 @@ DASHBOARD_BODY = """
       </table>
     </div>
   {% else %}
-    <div style="text-align: center; padding: 40px; color: var(--subtext);">
-      <p style="font-size: 1rem; color: #fff; margin-bottom: 6px;">No workout sessions recorded yet.</p>
-      <p style="font-size: 0.82rem; margin-bottom: 16px;">Perform your first workout to start tracking your daily progress.</p>
-      <a href="/workout" class="btn">Start Your First Workout</a>
+    <div style="text-align: center; padding: 48px; color: var(--text-secondary);">
+      <div style="font-size: 2.2rem; margin-bottom: 8px;">🏋️</div>
+      <p style="font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin-bottom: 4px;">No workout sessions recorded yet.</p>
+      <p style="font-size: 0.84rem; margin-bottom: 18px;">Perform your first workout to start tracking your daily progress and earning badges.</p>
+      <a href="/workout" class="btn-yellow">Start Your First Workout</a>
     </div>
   {% endif %}
 </div>
@@ -1565,28 +2328,42 @@ DASHBOARD_BODY = """
   const ctx = document.getElementById('progressChart').getContext('2d');
 
   new Chart(ctx, {
-    type: 'line',
+    type: 'bar',
     data: {
       labels: labels.length > 0 ? labels : ['No Data'],
       datasets: [{
         label: 'Repetitions',
         data: data.length > 0 ? data : [0],
-        borderColor: '#00ffc6',
-        backgroundColor: 'rgba(0, 255, 198, 0.1)',
-        fill: true,
-        tension: 0.35,
-        borderWidth: 2.5,
-        pointBackgroundColor: '#00ffc6',
-        pointRadius: 4
+        backgroundColor: '#facc15',
+        hoverBackgroundColor: '#eab308',
+        borderRadius: 6,
+        barThickness: 16,
+        maxBarThickness: 24
       }]
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#18181b',
+          titleColor: '#ffffff',
+          bodyColor: '#facc15',
+          cornerRadius: 8,
+          padding: 10
+        }
+      },
       scales: {
-        x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#9ca3af' } },
-        y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#9ca3af', precision: 0 } }
+        x: {
+          grid: { display: false },
+          ticks: { color: '#71717a', font: { family: 'Plus Jakarta Sans', weight: '600' } }
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: '#f3f4f6' },
+          ticks: { color: '#71717a', precision: 0, font: { family: 'Plus Jakarta Sans', weight: '600' } }
+        }
       }
     }
   });
@@ -1594,32 +2371,215 @@ DASHBOARD_BODY = """
 """
 
 AUTH_BODY = """
-<div class="card" style="max-width: 420px; margin: 40px auto; padding: 32px 28px;">
+<div class="bento-card" style="max-width: 440px; margin: 40px auto; padding: 36px 32px; border-radius: 24px;">
   <div style="text-align: center; margin-bottom: 24px;">
-    <div style="font-size: 2rem; margin-bottom: 8px;">⚡</div>
-    <h2 style="font-size: 1.4rem; font-weight: 800; color: #fff;">{{ title }}</h2>
-    <p style="font-size: 0.82rem; color: var(--subtext);">{{ subtitle }}</p>
+    <div style="width: 52px; height: 52px; border-radius: 16px; background: #facc15; color: #18181b; font-size: 1.6rem; display: flex; align-items: center; justify-content: center; margin: 0 auto 12px auto; box-shadow: 0 4px 12px rgba(250, 204, 21, 0.35);">
+      ⚡
+    </div>
+    <h2 style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">{{ title }}</h2>
+    <p style="font-size: 0.84rem; color: var(--text-secondary); margin-top: 4px;">{{ subtitle }}</p>
   </div>
 
   <form method="POST" action="{{ action }}">
-    <label style="font-size: 0.8rem; font-weight: 700; color: var(--subtext); display: block; margin-bottom: 6px;">Username</label>
-    <input type="text" name="username" placeholder="Username" required autocomplete="username">
+    <label style="font-size: 0.78rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; display: block; margin-bottom: 6px;">Username</label>
+    <input type="text" name="username" placeholder="e.g. alex_fitness" required autocomplete="username">
 
-    <label style="font-size: 0.8rem; font-weight: 700; color: var(--subtext); display: block; margin-bottom: 6px;">Password</label>
+    <label style="font-size: 0.78rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; display: block; margin-bottom: 6px;">Password</label>
     <input type="password" name="password" placeholder="••••••••" required autocomplete="current-password">
 
-    <button type="submit" class="btn" style="width: 100%; padding: 12px; margin-top: 8px;">
+    <button type="submit" class="btn-yellow" style="width: 100%; padding: 13px; font-size: 0.92rem; margin-top: 6px;">
       {{ button_label }}
     </button>
   </form>
 
-  <div style="text-align: center; font-size: 0.84rem; color: var(--subtext); margin-top: 18px;">
+  <div style="text-align: center; font-size: 0.85rem; color: var(--text-secondary); margin-top: 20px;">
     {% if is_register %}
-      Already have an account? <a href="/login" style="color: var(--accent); font-weight: 700; text-decoration: none;">Log In</a>
+      Already have an account? <a href="/login" style="color: var(--text-primary); font-weight: 800; text-decoration: underline;">Log In</a>
     {% else %}
-      Don't have an account? <a href="/register" style="color: var(--accent); font-weight: 700; text-decoration: none;">Register</a>
+      Don't have an account? <a href="/register" style="color: var(--text-primary); font-weight: 800; text-decoration: underline;">Register</a>
     {% endif %}
   </div>
+</div>
+"""
+
+SUMMARY_BODY = """
+<style>
+  @keyframes checkPop {
+    0% { transform: scale(0.6); opacity: 0; }
+    60% { transform: scale(1.15); opacity: 1; }
+    100% { transform: scale(1); }
+  }
+  .summary-hero-badge {
+    width: 72px;
+    height: 72px;
+    border-radius: 22px;
+    background: #facc15;
+    color: #18181b;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2.2rem;
+    font-weight: 800;
+    margin-bottom: 16px;
+    box-shadow: 0 10px 25px -5px rgba(250, 204, 21, 0.45);
+    animation: checkPop 0.5s ease-out;
+  }
+</style>
+
+<!-- Hero Header -->
+<div style="text-align: center; margin-bottom: 32px; margin-top: 10px;">
+  <div class="summary-hero-badge">✓</div>
+  <h1 style="font-size: 2.3rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.03em;">
+    Workout Completed!
+  </h1>
+  <p style="font-size: 0.95rem; color: var(--text-secondary); margin-top: 6px;">
+    Outstanding performance! Your repetitions and movement mechanics have been evaluated and rewarded.
+  </p>
+</div>
+
+<!-- Stats Row: 4 Bento Cards -->
+<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
+  <div class="bento-card">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <span class="stat-label">Exercise Completed</span>
+      <span style="font-size: 1.25rem;">
+        {% if 'squat' in session.exercise_type|lower %}🏋️{% elif 'push' in session.exercise_type|lower %}💪{% else %}⚡{% endif %}
+      </span>
+    </div>
+    <div class="stat-figure" style="font-size: 1.8rem; margin-top: 8px;">{{ session.exercise_type }}</div>
+    <span class="pill-tag pill-charcoal" style="margin-top: 8px;">Logged Session</span>
+  </div>
+
+  <div class="bento-card">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <span class="stat-label">Total Reps</span>
+      <span style="font-size: 1.25rem;">🔥</span>
+    </div>
+    <div class="stat-figure" style="font-size: 2.3rem; margin-top: 8px; color: #854d0e; font-family: 'JetBrains Mono', monospace;">
+      {{ session.rep_count }}
+    </div>
+    <span class="pill-tag pill-yellow" style="margin-top: 8px;">Completed Reps</span>
+  </div>
+
+  <div class="bento-card">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <span class="stat-label">EXP Earned</span>
+      <span style="font-size: 1.25rem;">⚡</span>
+    </div>
+    <div class="stat-figure" style="font-size: 2.3rem; margin-top: 8px; color: var(--text-primary); font-family: 'JetBrains Mono', monospace;">
+      +{{ exp_earned }} <span style="font-size: 1rem; color: var(--text-secondary);">XP</span>
+    </div>
+    <span class="pill-tag pill-yellow" style="margin-top: 8px;">
+      {% if 'push' in session.exercise_type|lower %}+12 EXP / rep{% elif 'curl' in session.exercise_type|lower %}+8 EXP / rep{% else %}+10 EXP / rep{% endif %}
+    </span>
+  </div>
+
+  <div class="bento-card">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <span class="stat-label">Average Form</span>
+      <span style="font-size: 1.25rem;">🎯</span>
+    </div>
+    <div class="stat-figure" style="font-size: 2.3rem; margin-top: 8px; color: #854d0e; font-family: 'JetBrains Mono', monospace;">
+      {{ session.avg_form_accuracy }}%
+    </div>
+    <div style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 8px;">
+      Time: <strong>{{ session.total_duration_seconds | format_duration }}</strong>
+    </div>
+  </div>
+</div>
+
+<!-- Bento Row 2: Level Progress Widget & New Badges Unlocked Section -->
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 28px;">
+  <!-- Level Progress Widget -->
+  <div class="bento-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+    <div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <span class="stat-label">Athlete Progression</span>
+        <span class="pill-tag pill-charcoal">Level {{ user_level }}</span>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 20px;">
+        <div style="width: 52px; height: 52px; border-radius: 16px; background: #facc15; color: #18181b; font-size: 1.5rem; font-weight: 800; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(250, 204, 21, 0.35);">
+          ⚡
+        </div>
+        <div>
+          <div style="font-size: 1.2rem; font-weight: 800; color: var(--text-primary);">Level {{ user_level }} Sisyphus Athlete</div>
+          <div style="font-size: 0.82rem; color: var(--text-secondary); font-weight: 600;">{{ user_exp }} Total Lifetime EXP</div>
+        </div>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; font-size: 0.82rem; font-weight: 700; margin-bottom: 8px;">
+          <span style="color: var(--text-secondary);">Level {{ user_level }} Progress</span>
+          <span style="color: #854d0e; font-family: 'JetBrains Mono', monospace;">{{ exp_in_level }} / 100 XP</span>
+        </div>
+        <div style="width: 100%; height: 12px; background: #f4f4f5; border-radius: 9999px; overflow: hidden; border: 1px solid #e5e7eb;">
+          <div style="width: {{ exp_progress_pct }}%; height: 100%; background: linear-gradient(90deg, #facc15, #18181b); border-radius: 9999px; transition: width 0.5s ease;"></div>
+        </div>
+        <div style="font-size: 0.76rem; color: var(--text-muted); margin-top: 6px;">
+          {{ exp_needed }} XP needed to reach Level {{ user_level + 1 }}
+        </div>
+      </div>
+    </div>
+
+    <div style="background: #fbfbfb; border: 1px solid #e5e7eb; border-radius: 14px; padding: 12px 16px; font-size: 0.82rem; color: var(--text-secondary);">
+      💡 Earn bonus XP by keeping your posture steady and hitting full joint depth on every rep!
+    </div>
+  </div>
+
+  <!-- New Badges Unlocked Section: Dark Bento Card Widget -->
+  <div class="bento-dark-card" style="display: flex; flex-direction: column; justify-content: space-between;">
+    <div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <div>
+          <h3 style="font-size: 1.15rem; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">🏆 Badges Unlocked</h3>
+          <p style="font-size: 0.78rem; color: #a1a1aa; margin-top: 2px;">Achievements earned during this session</p>
+        </div>
+        <span class="pill-tag pill-yellow">{{ new_badges|length }} New</span>
+      </div>
+
+      {% if new_badges %}
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          {% for b in new_badges %}
+            <div style="background: rgba(250, 204, 21, 0.12); border: 1px solid rgba(250, 204, 21, 0.4); border-radius: 14px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="font-size: 1.4rem; width: 40px; height: 40px; border-radius: 12px; background: rgba(250, 204, 21, 0.25); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                  {{ b.icon }}
+                </div>
+                <div>
+                  <div style="font-size: 0.92rem; font-weight: 700; color: #ffffff;">{{ b.name }}</div>
+                  <div style="font-size: 0.76rem; color: #d4d4d8;">{{ b.description }}</div>
+                </div>
+              </div>
+              <span class="pill-tag" style="background: #facc15; color: #18181b; padding: 4px 10px; font-size: 0.72rem;">🎉 UNLOCKED!</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div style="background: rgba(39, 39, 42, 0.5); border: 1px dashed #3f3f46; border-radius: 14px; padding: 28px; text-align: center;">
+          <div style="font-size: 2rem; margin-bottom: 8px;">🛡️</div>
+          <div style="font-size: 0.94rem; font-weight: 700; color: #ffffff;">No new badges unlocked this session</div>
+          <div style="font-size: 0.78rem; color: #a1a1aa; margin-top: 4px; max-width: 320px; margin-left: auto; margin-right: auto;">
+            Keep pushing! You're making progress toward Century Club, Iron Legs, and Level 5 Champion.
+          </div>
+        </div>
+      {% endif %}
+    </div>
+
+    <div style="margin-top: 16px;">
+      <span style="font-size: 0.76rem; color: #a1a1aa;">View all quests & badge requirements on your dashboard</span>
+    </div>
+  </div>
+</div>
+
+<!-- Action Buttons -->
+<div style="display: flex; gap: 14px; justify-content: center; align-items: center; margin-top: 8px;">
+  <a href="/" class="btn-yellow" style="padding: 13px 30px; font-size: 0.92rem;">
+    📊 Back to Dashboard
+  </a>
+  <a href="/workout" class="btn-charcoal" style="padding: 13px 30px; font-size: 0.92rem;">
+    🏋️ Start Another Workout
+  </a>
 </div>
 """
 
@@ -1629,13 +2589,104 @@ AUTH_BODY = """
 # ---------------------------------------------------------
 @app.route('/')
 def index():
-    """Default landing route."""
-    return render_layout(WORKOUT_BODY)
+    """
+    Primary Landing Route:
+    - Serves the Dashboard directly for logged-in users instead of redirecting to workout feed.
+    - For unauthenticated users visiting '/', redirects directly to '/login'.
+    """
+    if not current_user.is_authenticated:
+        return redirect(url_for('login'))
+    return dashboard()
+
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    """User analytics dashboard with Bento Box aesthetic, EXP/Leveling & SQLite Badge achievements."""
+    check_and_award_badges(current_user)
+
+    user_sessions = (
+        ExerciseSession.query.filter_by(user_id=current_user.id)
+        .order_by(ExerciseSession.timestamp.desc())
+        .all()
+    )
+
+    total_reps = sum(s.rep_count for s in user_sessions)
+    total_workouts = len(user_sessions)
+    total_duration = sum(s.total_duration_seconds for s in user_sessions)
+    avg_form = (
+        round(sum(s.avg_form_accuracy for s in user_sessions) / total_workouts, 1)
+        if total_workouts > 0
+        else 100.0
+    )
+
+    daily_volume = defaultdict(int)
+    for s in sorted(user_sessions, key=lambda x: x.timestamp):
+        if s.timestamp:
+            date_key = s.timestamp.strftime('%b %d')
+            daily_volume[date_key] += s.rep_count
+
+    chart_labels = list(daily_volume.keys())
+    chart_data = list(daily_volume.values())
+
+    user_exp = current_user.exp or 0
+    user_level = current_user.level or 1
+    exp_in_level = user_exp % 100
+    exp_progress_pct = exp_in_level
+
+    # Exercise distribution breakdown
+    squat_reps = sum(s.rep_count for s in user_sessions if "squat" in s.exercise_type.lower())
+    pushup_reps = sum(s.rep_count for s in user_sessions if "push" in s.exercise_type.lower())
+    curl_reps = sum(s.rep_count for s in user_sessions if "curl" in s.exercise_type.lower())
+    total_tracked = max(1, squat_reps + pushup_reps + curl_reps)
+    squat_pct = int(round((squat_reps / total_tracked) * 100)) if total_reps > 0 else 0
+    pushup_pct = int(round((pushup_reps / total_tracked) * 100)) if total_reps > 0 else 0
+    curl_pct = int(round((curl_reps / total_tracked) * 100)) if total_reps > 0 else 0
+
+    unlocked_names = {
+        b.name: (b.unlocked_at.strftime('%b %d, %Y') if b.unlocked_at else 'Unlocked')
+        for b in current_user.badges
+    }
+    badge_cards = []
+    for b_info in AVAILABLE_BADGES:
+        unlocked = b_info["name"] in unlocked_names
+        badge_cards.append({
+            "name": b_info["name"],
+            "icon": b_info["icon"],
+            "description": b_info["description"],
+            "requirement": b_info["requirement"],
+            "unlocked": unlocked,
+            "unlocked_date": unlocked_names.get(b_info["name"], "")
+        })
+
+    unlocked_count = len(unlocked_names)
+    total_badge_count = len(AVAILABLE_BADGES)
+
+    return render_layout(
+        DASHBOARD_BODY,
+        sessions=user_sessions,
+        total_reps=total_reps,
+        total_workouts=total_workouts,
+        total_duration=total_duration,
+        avg_form=avg_form,
+        chart_labels=chart_labels,
+        chart_data=chart_data,
+        user_level=user_level,
+        user_exp=user_exp,
+        exp_in_level=exp_in_level,
+        exp_progress_pct=exp_progress_pct,
+        badges=badge_cards,
+        squat_pct=squat_pct,
+        pushup_pct=pushup_pct,
+        curl_pct=curl_pct,
+        unlocked_count=unlocked_count,
+        total_badge_count=total_badge_count
+    )
 
 
 @app.route('/workout')
 def workout():
-    """Live workout tracking view."""
+    """Live workout tracking view with Bento Card encapsulation."""
     return render_layout(WORKOUT_BODY)
 
 
@@ -1654,7 +2705,7 @@ def register():
             return render_layout(
                 AUTH_BODY,
                 title="Create Account",
-                subtitle="Join Sisyphus AI to record workouts",
+                subtitle="Join Sisyphus AI to track your fitness",
                 button_label="Sign Up",
                 action="/register",
                 is_register=True
@@ -1666,13 +2717,13 @@ def register():
             return render_layout(
                 AUTH_BODY,
                 title="Create Account",
-                subtitle="Join Sisyphus AI to record workouts",
+                subtitle="Join Sisyphus AI to track your fitness",
                 button_label="Sign Up",
                 action="/register",
                 is_register=True
             )
 
-        new_user = User(username=username)
+        new_user = User(username=username, exp=0, level=1)
         new_user.set_password(password)
         db.session.add(new_user)
         db.session.commit()
@@ -1684,7 +2735,7 @@ def register():
     return render_layout(
         AUTH_BODY,
         title="Create Account",
-        subtitle="Join Sisyphus AI to record workouts",
+        subtitle="Join Sisyphus AI to track your fitness",
         button_label="Sign Up",
         action="/register",
         is_register=True
@@ -1732,7 +2783,7 @@ def logout():
 @app.route('/save_workout', methods=['POST'])
 @login_required
 def save_workout():
-    """Save active workout session into SQLite for the logged-in user."""
+    """Save active workout session into SQLite for the logged-in user with EXP & badge evaluation."""
     data = request.get_json(silent=True) or request.form
     exercise_type = data.get('exercise_type')
     if not exercise_type:
@@ -1755,78 +2806,74 @@ def save_workout():
         if "avg_form_accuracy" in data and data["avg_form_accuracy"] is not None:
             avg_acc = float(data["avg_form_accuracy"])
 
-        new_session = ExerciseSession(
-            user_id=current_user.id,
-            exercise_type=exercise_type,
-            rep_count=reps,
-            total_duration_seconds=round(duration, 1),
-            avg_form_accuracy=round(avg_acc, 1),
-            timestamp=datetime.now(timezone.utc)
-        )
-        db.session.add(new_session)
-        db.session.commit()
+    # Reset active session counter
+    tracker.reset_reps()
 
-        # Reset active session counter
-        tracker.reset_reps()
+    new_session = ExerciseSession(
+        user_id=current_user.id,
+        exercise_type=exercise_type,
+        rep_count=reps,
+        total_duration_seconds=round(duration, 1),
+        avg_form_accuracy=round(avg_acc, 1),
+        timestamp=datetime.now(timezone.utc)
+    )
+    db.session.add(new_session)
+
+    # Gamification: EXP Calculation & Leveling
+    base_exp = max(10, reps * 10)
+    form_bonus = 50 if avg_acc >= 90 else (25 if avg_acc >= 75 else 0)
+    exp_gained = base_exp + form_bonus
+
+    current_user.exp = (current_user.exp or 0) + exp_gained
+    new_level = 1 + (current_user.exp // 100)
+    leveled_up = new_level > current_user.level
+    current_user.level = new_level
+
+    db.session.commit()
+
+    # Persistent SQLite Badges evaluation
+    new_badges = check_and_award_badges(current_user)
+
+    if leveled_up:
+        flash(f"🎉 Level Up! You reached Level {current_user.level}! (+{exp_gained} EXP)", "success")
+    for nb in new_badges:
+        flash(f"🏆 Achievement Unlocked: {nb.icon} {nb.name} - {nb.description}", "success")
 
     if request.is_json:
         return jsonify({
             "success": True,
             "message": "Workout saved successfully!",
-            "session": new_session.to_dict()
+            "session": new_session.to_dict(),
+            "exp_gained": exp_gained,
+            "level": current_user.level,
+            "new_badges": [b.to_dict() for b in new_badges]
         })
 
-    flash(f"Workout saved! {reps} {exercise_type} logged.", "success")
+    flash(f"Workout saved! {reps} {exercise_type} logged (+{exp_gained} EXP).", "success")
     return redirect(url_for('dashboard'))
-
-
-@app.route('/dashboard')
-@login_required
-def dashboard():
-    """User analytics dashboard."""
-    user_sessions = (
-        ExerciseSession.query.filter_by(user_id=current_user.id)
-        .order_by(ExerciseSession.timestamp.desc())
-        .all()
-    )
-
-    total_reps = sum(s.rep_count for s in user_sessions)
-    total_workouts = len(user_sessions)
-    total_duration = sum(s.total_duration_seconds for s in user_sessions)
-    avg_form = (
-        round(sum(s.avg_form_accuracy for s in user_sessions) / total_workouts, 1)
-        if total_workouts > 0
-        else 100.0
-    )
-
-    daily_volume = defaultdict(int)
-    for s in sorted(user_sessions, key=lambda x: x.timestamp):
-        if s.timestamp:
-            date_key = s.timestamp.strftime('%b %d')
-            daily_volume[date_key] += s.rep_count
-
-    chart_labels = list(daily_volume.keys())
-    chart_data = list(daily_volume.values())
-
-    return render_layout(
-        DASHBOARD_BODY,
-        sessions=user_sessions,
-        total_reps=total_reps,
-        total_workouts=total_workouts,
-        total_duration=total_duration,
-        avg_form=avg_form,
-        chart_labels=chart_labels,
-        chart_data=chart_data
-    )
 
 
 @app.route('/video_feed')
 def video_feed():
-    """Video feed endpoint."""
+    """Video feed endpoint streaming multipart JPEG."""
     return Response(
-        stream_mgr.generate_frames(),
+        generate_frames(),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
+
+
+@app.route('/pause_feed', methods=['POST', 'GET'])
+def pause_feed():
+    """Explicitly release camera VideoCapture when leaving or pausing workout."""
+    stream_mgr.pause()
+    return jsonify({"success": True, "paused": True})
+
+
+@app.route('/resume_feed', methods=['POST', 'GET'])
+def resume_feed():
+    """Resume video feed and re-acquire camera."""
+    stream_mgr.resume()
+    return jsonify({"success": True, "paused": False})
 
 
 @app.route('/status')
@@ -1834,6 +2881,7 @@ def status():
     """Real-time status endpoint."""
     data = tracker.get_status()
     data['source'] = stream_mgr.source_mode
+    data['is_paused'] = stream_mgr.is_paused
     return jsonify(data)
 
 
@@ -1881,13 +2929,18 @@ def process_frame():
         if frame is None:
             return jsonify({"error": "Failed to decode frame"}), 400
 
+        # Performance Optimization: Resize incoming frame to 480x360 before MediaPipe processing to reduce CPU/GPU load
         h, w = frame.shape[:2]
-        if w > 640:
-            scale = 640.0 / w
-            frame = cv2.resize(frame, (640, int(h * scale)), interpolation=cv2.INTER_AREA)
+        if w != 480 or h != 360:
+            frame = cv2.resize(frame, (480, 360), interpolation=cv2.INTER_AREA)
 
-        processed = tracker.process_frame(frame)
-        ret, buf = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        # Performance Optimization: Process pose tracking every 2nd frame (frame skipping)
+        stream_mgr.frame_count += 1
+        skip_pose = (stream_mgr.frame_count % 2 != 0)
+        processed = tracker.process_frame(frame, skip_pose=skip_pose)
+
+        # Bandwidth Optimization: Set JPEG encoding compression to quality 65
+        ret, buf = cv2.imencode('.jpg', processed, [cv2.IMWRITE_JPEG_QUALITY, 65])
         if not ret:
             return jsonify({"error": "Failed to encode frame"}), 500
 
@@ -1905,9 +2958,6 @@ def process_frame():
 # ---------------------------------------------------------
 # DATABASE CREATION & APP STARTUP
 # ---------------------------------------------------------
-with app.app_context():
-    db.create_all()
-
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     print(f"[*] Starting Sisyphus AI Exercise Tracker on port {port}...")
