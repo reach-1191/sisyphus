@@ -1616,6 +1616,164 @@ html, body {
   line-height: 1.45;
 }
 
+/* Coach Doge Elements */
+.doge-coach-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: #27272a;
+  border: 1.5px solid rgba(250, 204, 21, 0.5) !important;
+  border-radius: 16px;
+  padding: 16px 18px;
+  position: relative;
+}
+
+.doge-avatar-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.doge-coach-avatar {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: top center;
+  border: 2.5px solid #facc15;
+  box-shadow: 0 4px 14px rgba(250, 204, 21, 0.35);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  background: #18181b;
+}
+
+.doge-coach-avatar:hover {
+  transform: scale(1.08) rotate(-3deg);
+  box-shadow: 0 6px 20px rgba(250, 204, 21, 0.55);
+}
+
+.doge-speaking {
+  animation: dogeTalk 0.4s ease-in-out infinite alternate;
+}
+
+@keyframes dogeTalk {
+  0% { transform: scale(1) rotate(0deg); }
+  100% { transform: scale(1.08) rotate(3deg); box-shadow: 0 0 20px #facc15; }
+}
+
+.doge-badge-pill {
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: #facc15;
+  color: #18181b;
+  padding: 2px 8px;
+  border-radius: 12px;
+  white-space: nowrap;
+}
+
+.doge-speech-bubble-wrapper {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.doge-speech-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.doge-voice-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(250, 204, 21, 0.15);
+  border: 1px solid #facc15;
+  color: #facc15;
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.doge-voice-btn:hover {
+  background: #facc15;
+  color: #18181b;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(250, 204, 21, 0.35);
+}
+
+.doge-speech-bubble {
+  position: relative;
+  background: #18181b;
+  border: 1.5px solid rgba(250, 204, 21, 0.4);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-top: 2px;
+}
+
+.doge-speech-bubble::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 18px;
+  width: 0;
+  height: 0;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-right: 8px solid rgba(250, 204, 21, 0.4);
+}
+
+.doge-speech-bubble::after {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 19px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 7px solid #18181b;
+}
+
+.bubble-speaking {
+  border-color: #facc15;
+  box-shadow: 0 0 12px rgba(250, 204, 21, 0.3);
+}
+
+.doge-speech-text {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: #ffffff !important;
+  line-height: 1.45;
+}
+
+.doge-speech-flair {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #facc15;
+  margin-top: 5px;
+  letter-spacing: 0.02em;
+}
+
+@media (max-width: 600px) {
+  .doge-coach-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .doge-speech-bubble::before,
+  .doge-speech-bubble::after {
+    display: none;
+  }
+}
+
 @media (max-width: 768px) {
   .coach-insights-grid {
     grid-template-columns: 1fr;

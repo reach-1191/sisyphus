@@ -222,10 +222,13 @@ class ExerciseTrackerTestCase(unittest.TestCase):
         self.assertIn(b'Session Duration', res_summary.data)
         self.assertIn(b'Form Score', res_summary.data)
         self.assertIn(b'EXP Earned', res_summary.data)
-        # Verify Coach Insights Bento Card
+        # Verify Coach Insights Bento Card with Coach Doge
         self.assertIn(b'Coach Insights', res_summary.data)
         self.assertIn(b'Positive Encouragement', res_summary.data)
         self.assertIn(b'Technical Improvement Tip', res_summary.data)
+        self.assertIn(b'Coach Doge', res_summary.data)
+        self.assertIn(b'doge.png', res_summary.data)
+        self.assertIn(b'speakDogeEncouragement', res_summary.data)
         self.assertIn(b'Squats: Drive knees outward over toes throughout descent.', res_summary.data)
 
     def test_coach_insights_precision_over_90(self):

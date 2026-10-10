@@ -73,12 +73,23 @@
     </div>
 
     <div class="coach-insights-grid">
-      <!-- Positive Encouragement -->
-      <div class="coach-insight-item">
-        <div class="coach-insight-icon-box">🏆</div>
-        <div class="coach-insight-text-group">
-          <div class="coach-insight-label">Positive Encouragement</div>
-          <div class="coach-insight-body">{{ coach_encouragement }}</div>
+      <!-- Positive Encouragement with Coach Doge -->
+      <div class="coach-insight-item doge-coach-item">
+        <div class="doge-avatar-container">
+          <img src="{{ url_for('static', filename='doge.png') }}" alt="Coach Doge" class="doge-coach-avatar">
+          <span class="doge-badge-pill">Coach Doge</span>
+        </div>
+        <div class="coach-insight-text-group doge-speech-bubble-wrapper">
+          <div class="doge-speech-header">
+            <span class="coach-insight-label">Positive Encouragement</span>
+            <button type="button" id="btn-doge-speak" class="doge-voice-btn" title="Hear Coach Doge speak" onclick="speakDogeEncouragement()">
+              <span class="voice-icon">🔊</span> Hear Doge
+            </button>
+          </div>
+          <div class="doge-speech-bubble">
+            <div class="coach-insight-body doge-speech-text" id="doge-encouragement-text">{{ coach_encouragement }}</div>
+            <div class="doge-speech-flair">✨ Much strength! Very gains! Wow! ✨</div>
+          </div>
         </div>
       </div>
 
@@ -224,4 +235,57 @@
     </a>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  function speakDogeEncouragement() {
+    const textEl = document.getElementById('doge-encouragement-text');
+    if (!textEl || !window.speechSynthesis) return;
+    const text = textEl.textContent.trim();
+    if (!text) return;
+
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.rate = 1.0;
+    utter.pitch = 1.15; // Friendly, energetic Coach Doge voice pitch
+
+    // Choose preferred English voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const preferredVoice = voices.find(v => v.lang.startsWith('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('David')));
+    if (preferredVoice) utter.voice = preferredVoice;
+
+    // Visual animation feedback while Doge is speaking
+    const avatar = document.querySelector('.doge-coach-avatar');
+    const bubble = document.querySelector('.doge-speech-bubble');
+    if (avatar) avatar.classList.add('doge-speaking');
+    if (bubble) bubble.classList.add('bubble-speaking');
+
+    utter.onend = () => {
+      if (avatar) avatar.classList.remove('doge-speaking');
+      if (bubble) bubble.classList.remove('bubble-speaking');
+    };
+    utter.onerror = () => {
+      if (avatar) avatar.classList.remove('doge-speaking');
+      if (bubble) bubble.classList.remove('bubble-speaking');
+    };
+
+    window.speechSynthesis.speak(utter);
+  }
+
+  // Speak automatically on load with user gesture fallback
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+      speakDogeEncouragement();
+    }, 500);
+
+    const unlockAudio = () => {
+      if (window.speechSynthesis && !window.speechSynthesis.speaking) {
+        speakDogeEncouragement();
+      }
+      document.removeEventListener('click', unlockAudio);
+    };
+    document.addEventListener('click', unlockAudio, { once: true });
+  });
+</script>
 {% endblock %}
