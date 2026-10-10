@@ -245,11 +245,12 @@ def init_db():
             with db.engine.connect() as conn:
                 res = conn.execute(text("PRAGMA table_info(users)"))
                 cols = [row[1] for row in res.fetchall()]
-                if 'exp' not in cols:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN exp INTEGER DEFAULT 0 NOT NULL"))
-                if 'level' not in cols:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN level INTEGER DEFAULT 1 NOT NULL"))
-                conn.commit()
+                if cols:
+                    if 'exp' not in cols:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN exp INTEGER DEFAULT 0 NOT NULL"))
+                    if 'level' not in cols:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN level INTEGER DEFAULT 1 NOT NULL"))
+                    conn.commit()
         except Exception as e:
             print(f"[!] DB migration notice: {e}")
         db.create_all()
