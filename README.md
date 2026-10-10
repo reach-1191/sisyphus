@@ -1,4 +1,4 @@
-# Sisyphus AI Coach
+# Sisyphus AI
 
 > **Real-time AI pose tracking, biomechanical form correction, and gamified workout dashboard powered by MediaPipe and Flask.**
 
@@ -10,7 +10,7 @@
 [![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Site-blue.svg?logo=github)](https://reach-1191.github.io/sisyphus/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**Sisyphus AI Coach** is an intelligent fitness companion designed to elevate your personal training. Combining state-of-the-art computer vision pose estimation with real-time biometric analysis and client-side vocal coaching, Sisyphus tracks your workout form rep-by-rep, detects kinematic faults before they lead to injury, and turns fitness into an addictive RPG leveling experience.
+**Sisyphus AI** is an intelligent fitness companion designed to elevate your personal training. Combining state-of-the-art computer vision pose estimation with real-time biometric analysis and client-side vocal coaching, Sisyphus tracks your workout form rep-by-rep, detects kinematic faults before they lead to injury, and turns fitness into an addictive RPG leveling experience.
 
 Try it here: [Sisyphus](https://shorturl.at/O34T1)
 
