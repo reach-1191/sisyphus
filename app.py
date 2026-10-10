@@ -1,6 +1,12 @@
-# pip install flask flask-sqlalchemy flask-login werkzeug opencv-python-headless mediapipe numpy
 import os
 import sys
+
+# Transparently delegate to local virtual environment if run via system python3
+if __name__ == '__main__' and sys.prefix == sys.base_prefix:
+    _venv_python = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.venv', 'bin', 'python')
+    if os.path.isfile(_venv_python) and os.access(_venv_python, os.X_OK) and sys.executable != _venv_python:
+        os.execv(_venv_python, [_venv_python] + sys.argv)
+
 import time
 import math
 import json
@@ -45,6 +51,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, 'pose_landmarker_lite.task')
 SQUAT_DEMO_PATH = os.path.join(BASE_DIR, 'squat_demo.mp4')
 PUSHUP_DEMO_PATH = os.path.join(BASE_DIR, 'pushup_demo.mp4')
+DUMBBELL_DEMO_PATH = os.path.join(BASE_DIR, 'dumbbell_demo.mp4')
 MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task'
 
 
@@ -838,6 +845,7 @@ class ExerciseTracker:
         return audio_ev, vocal_msg
 
     def _draw_skeleton(self, frame, landmarks, w, h):
+        """Minimal keypoint skeleton overlay with thinner lines and clean joint highlights."""
         connections = [
             (11, 12), (11, 23), (12, 24), (23, 24),
             (11, 13), (13, 15), (12, 14), (14, 16),
@@ -848,58 +856,21 @@ class ExerciseTracker:
             if p1 < len(landmarks) and p2 < len(landmarks):
                 pt1 = (int(landmarks[p1].x * w), int(landmarks[p1].y * h))
                 pt2 = (int(landmarks[p2].x * w), int(landmarks[p2].y * h))
-                cv2.line(frame, pt1, pt2, color, 2, cv2.LINE_AA)
+                cv2.line(frame, pt1, pt2, color, 1, cv2.LINE_AA)
 
         for idx in [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]:
             if idx < len(landmarks):
                 pt = (int(landmarks[idx].x * w), int(landmarks[idx].y * h))
-                cv2.circle(frame, pt, 5, (255, 255, 255), -1, cv2.LINE_AA)
-                cv2.circle(frame, pt, 7, color, 1, cv2.LINE_AA)
+                cv2.circle(frame, pt, 3, (255, 255, 255), -1, cv2.LINE_AA)
+                cv2.circle(frame, pt, 5, color, 1, cv2.LINE_AA)
 
     def _draw_hud(self, frame):
-        h, w, _ = frame.shape
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (w, 98), (9, 13, 22), -1)
-        cv2.addWeighted(overlay, 0.78, frame, 0.22, 0, frame)
-        cv2.line(frame, (0, 98), (w, 98), (31, 41, 55), 1, cv2.LINE_AA)
-
-        elapsed_sec = int(self.get_duration())
-        mins, secs = divmod(elapsed_sec, 60)
-        time_str = f"{mins:02d}:{secs:02d}"
-
-        cv2.putText(frame, f"SISYPHUS AI  |  EXERCISE: {self.exercise.upper()}  |  TIME: {time_str}",
-                    (20, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (250, 204, 21), 1, cv2.LINE_AA)
-
-        cv2.putText(frame, "REPS", (20, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (156, 163, 175), 1, cv2.LINE_AA)
-        rep_col = (250, 204, 21) if self.stage == "down" else (255, 255, 255)
-        cv2.putText(frame, str(self.counter), (20, 85), cv2.FONT_HERSHEY_SIMPLEX, 1.25, rep_col, 3, cv2.LINE_AA)
-
-        cv2.putText(frame, "STAGE", (115, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (156, 163, 175), 1, cv2.LINE_AA)
-        stage_col = (250, 204, 21) if self.stage == "down" else (245, 158, 11)
-        cv2.putText(frame, self.stage.upper(), (115, 85), cv2.FONT_HERSHEY_SIMPLEX, 1.05, stage_col, 2, cv2.LINE_AA)
-
-        if self.exercise == "squat":
-            angle_title = "KNEE ANGLE"
-        elif self.exercise == "pushup":
-            angle_title = "ELBOW ANGLE"
-        else:
-            angle_title = "ARM ANGLE"
-
-        cv2.putText(frame, angle_title, (230, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (156, 163, 175), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"{int(self.smoothed_primary_angle)} deg", (230, 85), cv2.FONT_HERSHEY_SIMPLEX, 1.05, (255, 255, 255), 2, cv2.LINE_AA)
-
-        score_x = max(390, w - 200)
-        cv2.putText(frame, "FORM SCORE", (score_x, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (156, 163, 175), 1, cv2.LINE_AA)
-        score_col = (250, 204, 21) if self.form_score >= 80 else ((245, 158, 11) if self.form_score >= 60 else (239, 68, 68))
-        cv2.putText(frame, f"{self.form_score}%", (score_x, 85), cv2.FONT_HERSHEY_SIMPLEX, 1.05, score_col, 2, cv2.LINE_AA)
-
-        fb_h = 42
-        fb_overlay = frame.copy()
-        cv2.rectangle(fb_overlay, (0, h - fb_h), (w, h), (9, 13, 22), -1)
-        cv2.addWeighted(fb_overlay, 0.8, frame, 0.2, 0, frame)
-
-        msg_col = (239, 68, 68) if self.warning_flags else ((250, 204, 21) if "Complete" in self.feedback or "Great" in self.feedback else (243, 244, 246))
-        cv2.putText(frame, f"FEEDBACK: {self.feedback}", (20, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.58, msg_col, 2, cv2.LINE_AA)
+        """
+        Minimal HUD pass-through:
+        Heavy dark solid OpenCV rectangles are replaced by modern sleek
+        floating glassmorphism CSS UI over the frame container in the browser.
+        """
+        pass
 
 
 # ---------------------------------------------------------
@@ -1009,6 +980,8 @@ class VideoStreamManager:
             return PUSHUP_DEMO_PATH
         if self.tracker.exercise == "squat" and os.path.exists(SQUAT_DEMO_PATH):
             return SQUAT_DEMO_PATH
+        if self.tracker.exercise == "curl" and os.path.exists(DUMBBELL_DEMO_PATH):
+            return DUMBBELL_DEMO_PATH
         return None
 
     def _open_source(self):
@@ -1572,9 +1545,37 @@ WORKOUT_BODY = """
 <div style="display: grid; grid-template-columns: 1fr 390px; gap: 24px;">
   <!-- Video Feed & Bento Setup Card -->
   <div class="bento-card" style="padding: 24px; display: flex; flex-direction: column; gap: 18px;">
-    <!-- Encapsulated Video Feed -->
+    <!-- Encapsulated Video Feed with Modern Floating Glassmorphism Camera HUD -->
     <div style="position: relative; width: 100%; aspect-ratio: 16 / 9; background: #09090b; border-radius: 16px; overflow: hidden; border: 1px solid var(--card-border); box-shadow: inset 0 2px 8px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center;">
       <img id="video-feed-img" src="/video_feed" alt="MediaPipe Tracking Feed" style="width: 100%; height: 100%; object-fit: contain; display: block;" />
+
+      <!-- Top Floating Glassmorphism HUD Bar -->
+      <div style="position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: center; pointer-events: none; z-index: 10;">
+        <!-- Top Left: Exercise Mode & Phase Pill Badge -->
+        <div style="display: flex; align-items: center; gap: 10px; background: rgba(24, 24, 27, 0.75); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 6px 14px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);">
+          <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981;"></span>
+          <span id="hud-exercise-mode" style="color: #ffffff; font-weight: 700; font-size: 0.84rem; letter-spacing: 0.04em; text-transform: uppercase;">Squats</span>
+          <span id="hud-stage-pill" style="font-size: 0.72rem; font-weight: 800; padding: 2px 8px; border-radius: 8px; background: rgba(250, 204, 21, 0.2); color: #facc15; font-family: 'JetBrains Mono', monospace; transition: all 0.2s ease;">UP</span>
+        </div>
+
+        <!-- Top Right: Rep Counter Pill Badge with Warm Yellow Typography -->
+        <div style="display: flex; align-items: center; gap: 8px; background: rgba(24, 24, 27, 0.75); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 6px 16px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);">
+          <span style="font-size: 0.7rem; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em;">REPS</span>
+          <span id="hud-rep-count" style="color: #facc15; font-size: 1.45rem; font-weight: 800; font-family: 'JetBrains Mono', monospace; line-height: 1; transition: transform 0.18s ease;">0</span>
+        </div>
+      </div>
+
+      <!-- Bottom Floating Glassmorphism HUD Bar: Form Status & Precision Metrics -->
+      <div style="position: absolute; bottom: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: center; pointer-events: none; z-index: 10; background: rgba(24, 24, 27, 0.75); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 8px 16px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);">
+        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+          <span id="hud-status-icon" style="font-size: 0.95rem;">⚡</span>
+          <span id="hud-form-status" style="color: #ffffff; font-size: 0.86rem; font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">Ready - Position body in frame</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; flex-shrink: 0; margin-left: 12px;">
+          <span id="hud-angle-pill" style="font-size: 0.78rem; font-weight: 700; color: #d1d5db; font-family: 'JetBrains Mono', monospace;">180°</span>
+          <span id="hud-score-pill" style="font-size: 0.78rem; font-weight: 800; color: #facc15; background: rgba(250, 204, 21, 0.18); padding: 3px 8px; border-radius: 8px; font-family: 'JetBrains Mono', monospace;">100%</span>
+        </div>
+      </div>
     </div>
 
     <!-- Mode Selector Bar (Warm Yellow Buttons & Pills) -->
@@ -1696,7 +1697,7 @@ WORKOUT_BODY = """
 <script>
   let voiceEnabled = true;
   let lastSpokenTime = 0;
-  let lastRepCount = 0;
+  let lastRepCount = null;
   let currentDuration = 0;
   let currentAccuracy = 100;
   let lastAlertTimestamp = Date.now() / 1000;
@@ -1706,6 +1707,8 @@ WORKOUT_BODY = """
   let webcamStream = null;
   let currentBlobUrl = null;
   let isCameraPaused = false;
+  let audioCtx = null;
+  let selectedVoice = null;
 
   const repsEl = document.getElementById("reps-num");
   const phaseBadgeEl = document.getElementById("phase-badge");
@@ -1740,6 +1743,15 @@ WORKOUT_BODY = """
   const btnStartSession = document.getElementById("btn-start-session");
   const workoutSaveForm = document.getElementById("workout-save-form");
 
+  // Modern Floating Glassmorphism Camera HUD Elements
+  const hudExerciseMode = document.getElementById("hud-exercise-mode");
+  const hudStagePill = document.getElementById("hud-stage-pill");
+  const hudRepCount = document.getElementById("hud-rep-count");
+  const hudStatusIcon = document.getElementById("hud-status-icon");
+  const hudFormStatus = document.getElementById("hud-form-status");
+  const hudAnglePill = document.getElementById("hud-angle-pill");
+  const hudScorePill = document.getElementById("hud-score-pill");
+
   function formatTime(totalSec) {
     const s = Math.floor(totalSec || 0);
     const mins = Math.floor(s / 60);
@@ -1747,8 +1759,83 @@ WORKOUT_BODY = """
     return (mins < 10 ? "0" : "") + mins + ":" + (secs < 10 ? "0" : "") + secs;
   }
 
-  // Unlock browser Web Speech API autoplay restrictions upon user interaction
+  // Web Audio API for Crisp Rep Chime Feedback
+  function getAudioContext() {
+    if (!audioCtx) {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (AudioContextClass) {
+        audioCtx = new AudioContextClass();
+      }
+    }
+    if (audioCtx && audioCtx.state === "suspended") {
+      audioCtx.resume();
+    }
+    return audioCtx;
+  }
+
+  function playRepChime() {
+    try {
+      const ctx = getAudioContext();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = "sine";
+      // Crisp 880Hz high-frequency synthesized sine wave chime/ding
+      osc.frequency.setValueAtTime(880, now);
+
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.3, now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now);
+      osc.stop(now + 0.28);
+    } catch (e) {
+      console.warn("Web Audio chime error:", e);
+    }
+  }
+
+  // Query browser voices and prioritize natural/premium human-like voices
+  function loadBestVoice() {
+    if (!window.speechSynthesis) return;
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices || voices.length === 0) return;
+
+    // Prioritize natural/premium voices: search for voices containing 'Google', 'Natural', 'Samantha', 'Karen', or 'Daniel'
+    const priorityKeywords = ['Google', 'Natural', 'Samantha', 'Karen', 'Daniel'];
+    for (const kw of priorityKeywords) {
+      const match = voices.find(v => v.lang && v.lang.startsWith("en") && v.name.includes(kw));
+      if (match) {
+        selectedVoice = match;
+        return;
+      }
+    }
+    for (const kw of priorityKeywords) {
+      const match = voices.find(v => v.name.includes(kw));
+      if (match) {
+        selectedVoice = match;
+        return;
+      }
+    }
+    const defaultEn = voices.find(v => v.lang === "en-US" || v.lang === "en_US") ||
+                      voices.find(v => v.lang && v.lang.startsWith("en"));
+    selectedVoice = defaultEn || voices[0];
+  }
+
+  if (window.speechSynthesis) {
+    loadBestVoice();
+    if (window.speechSynthesis.onvoiceschanged !== undefined) {
+      window.speechSynthesis.onvoiceschanged = loadBestVoice;
+    }
+  }
+
+  // Unlock browser audio context and Web Speech API on user interaction
   function unlockAudio() {
+    getAudioContext();
     if (!audioUnlocked && window.speechSynthesis) {
       try {
         const dummy = new SpeechSynthesisUtterance("");
@@ -1756,7 +1843,7 @@ WORKOUT_BODY = """
         window.speechSynthesis.speak(dummy);
         audioUnlocked = true;
         if (btnStartSession) {
-          btnStartSession.innerHTML = "<span>🔊</span> <span>Voice Audio Active</span>";
+          btnStartSession.innerHTML = "<span>🔊</span> <span>Audio Active</span>";
           btnStartSession.className = "btn-ghost";
           btnStartSession.style.color = "#18181b";
         }
@@ -1774,7 +1861,7 @@ WORKOUT_BODY = """
   }
   document.addEventListener("click", unlockAudio);
 
-  // Client-side Web Speech API playback with 4-second delay throttle
+  // Client-side Web Speech API playback with natural tuning and 4-second delay throttle
   function speakFormError(errorMessage) {
     if (!voiceEnabled || !window.speechSynthesis || !errorMessage) return;
     const now = Date.now();
@@ -1783,9 +1870,17 @@ WORKOUT_BODY = """
     try {
       window.speechSynthesis.cancel();
       const utter = new SpeechSynthesisUtterance(errorMessage);
-      utter.rate = 1.05;
+      if (!selectedVoice) loadBestVoice();
+      if (selectedVoice) {
+        utter.voice = selectedVoice;
+        utter.lang = selectedVoice.lang || "en-US";
+      } else {
+        utter.lang = "en-US";
+      }
+      // Tune speech parameters for human-like cadence: pitch 1.0, rate 1.05, volume 1.0
       utter.pitch = 1.0;
-      utter.lang = "en-US";
+      utter.rate = 1.05;
+      utter.volume = 1.0;
       window.speechSynthesis.speak(utter);
       lastSpokenTime = now;
     } catch (e) {
@@ -1863,13 +1958,26 @@ WORKOUT_BODY = """
   function updateTelemetry(data) {
     if (!data) return;
 
-    if (data.reps !== lastRepCount) {
+    if (lastRepCount === null) {
       lastRepCount = data.reps;
       repsEl.textContent = data.reps;
+      if (hudRepCount) hudRepCount.textContent = data.reps;
+    } else if (data.reps !== lastRepCount) {
+      if (data.reps > lastRepCount) {
+        playRepChime();
+      }
+      lastRepCount = data.reps;
+      repsEl.textContent = data.reps;
+      if (hudRepCount) hudRepCount.textContent = data.reps;
       repsEl.style.transform = "scale(1.15)";
-      setTimeout(() => { repsEl.style.transform = "scale(1)"; }, 180);
+      if (hudRepCount) hudRepCount.style.transform = "scale(1.2)";
+      setTimeout(() => {
+        repsEl.style.transform = "scale(1)";
+        if (hudRepCount) hudRepCount.style.transform = "scale(1)";
+      }, 180);
     } else {
       repsEl.textContent = data.reps;
+      if (hudRepCount) hudRepCount.textContent = data.reps;
     }
 
     if (data.duration_seconds !== undefined) {
@@ -1885,42 +1993,71 @@ WORKOUT_BODY = """
     const isDown = data.stage === "down";
     phaseBadgeEl.textContent = isDown ? "DOWN" : "UP";
     phaseBadgeEl.className = isDown ? "pill-tag pill-yellow" : "pill-tag pill-gray";
+    if (hudStagePill) {
+      hudStagePill.textContent = isDown ? "DOWN" : "UP";
+      hudStagePill.style.color = isDown ? "#facc15" : "#9ca3af";
+      hudStagePill.style.background = isDown ? "rgba(250, 204, 21, 0.22)" : "rgba(255, 255, 255, 0.08)";
+    }
 
+    let exerciseDisplayName = "Squats";
     if (data.exercise === "squat") {
+      exerciseDisplayName = "Squats";
       primaryAngleLabel.textContent = "Knee Angle";
       primaryAngleVal.textContent = Math.round(data.primary_angle) + "°";
       secondaryAngleLabel.textContent = "Target Depth";
       secondaryAngleVal.textContent = "≤ 100°";
       activeSideText.textContent = `Active: ${data.active_side === 'right' ? 'Right Leg' : 'Left Leg'}`;
+      if (hudAnglePill) hudAnglePill.textContent = Math.round(data.primary_angle) + "°";
     } else if (data.exercise === "pushup") {
+      exerciseDisplayName = "Push-ups";
       primaryAngleLabel.textContent = "Elbow Angle";
       primaryAngleVal.textContent = Math.round(data.primary_angle) + "°";
       secondaryAngleLabel.textContent = "Spine Angle";
       secondaryAngleVal.textContent = Math.round(data.secondary_angle) + "°";
       activeSideText.textContent = `Flare: ${Math.round(data.flare_angle)}° (≤ 75°)`;
+      if (hudAnglePill) hudAnglePill.textContent = Math.round(data.primary_angle) + "°";
     } else {
+      exerciseDisplayName = "Dumbbell Curls";
       primaryAngleLabel.textContent = "Arm Angle";
       primaryAngleVal.textContent = Math.round(data.primary_angle) + "°";
       secondaryAngleLabel.textContent = "Curl Range";
       secondaryAngleVal.textContent = "< 40° / > 150°";
       activeSideText.textContent = `Active: ${data.active_side === 'right' ? 'Right Arm' : 'Left Arm'}`;
+      if (hudAnglePill) hudAnglePill.textContent = Math.round(data.primary_angle) + "°";
     }
+    if (hudExerciseMode) hudExerciseMode.textContent = exerciseDisplayName;
 
     const score = Math.max(0, Math.min(100, data.form_score));
     scoreValEl.textContent = score + "%";
     scoreBarEl.style.width = score + "%";
+    if (hudScorePill) hudScorePill.textContent = score + "%";
 
     feedbackMsg.textContent = data.feedback;
-    if (data.warnings && data.warnings.length > 0) {
+    if (hudFormStatus) hudFormStatus.textContent = data.feedback;
+
+    const hasWarnings = data.warnings && data.warnings.length > 0;
+    if (hasWarnings) {
       feedbackBanner.style.background = "rgba(239, 68, 68, 0.1)";
       feedbackBanner.style.borderColor = "rgba(239, 68, 68, 0.3)";
       feedbackAvatar.style.background = "var(--accent-red)";
       feedbackAvatar.style.color = "#ffffff";
+      if (hudStatusIcon) hudStatusIcon.textContent = "⚠️";
+      if (hudFormStatus) hudFormStatus.style.color = "#f87171";
+      if (hudScorePill) {
+        hudScorePill.style.color = "#f87171";
+        hudScorePill.style.background = "rgba(239, 68, 68, 0.18)";
+      }
     } else {
       feedbackBanner.style.background = "rgba(250, 204, 21, 0.12)";
       feedbackBanner.style.borderColor = "rgba(250, 204, 21, 0.4)";
       feedbackAvatar.style.background = "#facc15";
       feedbackAvatar.style.color = "#18181b";
+      if (hudStatusIcon) hudStatusIcon.textContent = "⚡";
+      if (hudFormStatus) hudFormStatus.style.color = "#ffffff";
+      if (hudScorePill) {
+        hudScorePill.style.color = "#facc15";
+        hudScorePill.style.background = "rgba(250, 204, 21, 0.18)";
+      }
     }
 
     // Trigger speech ONLY on specific form errors with 4s debounce
@@ -2032,6 +2169,7 @@ WORKOUT_BODY = """
     await fetch("/reset", { method: "POST" });
     lastRepCount = 0;
     repsEl.textContent = "0";
+    if (hudRepCount) hudRepCount.textContent = "0";
     sessionTimerEl.textContent = "00:00";
   });
 
@@ -2875,6 +3013,15 @@ def resume_feed():
     """Resume video feed and re-acquire camera."""
     stream_mgr.resume()
     return jsonify({"success": True, "paused": False})
+
+
+@app.route('/api/audio_alert')
+def api_audio_alert():
+    """Lightweight endpoint for throttled form warning vocal cues."""
+    return jsonify({
+        "alert": tracker.latest_audio_alert,
+        "timestamp": tracker.latest_alert_time
+    })
 
 
 @app.route('/status')

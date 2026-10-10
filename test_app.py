@@ -65,6 +65,7 @@ class ExerciseTrackerTestCase(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(tracker.exercise, "curl")
         self.assertIsNone(tracker.audio_event)
+        self.assertTrue(stream_mgr._get_demo_path().endswith("dumbbell_demo.mp4"))
 
     def test_index_route_unauthenticated(self):
         # Unauthenticated user visiting root '/' redirects directly to '/login'
@@ -152,6 +153,14 @@ class ExerciseTrackerTestCase(unittest.TestCase):
             badge_names = [b.name for b in u.badges]
             self.assertIn('First Step', badge_names)
             self.assertIn('Form Perfectionist', badge_names)
+
+    def test_audio_alert_endpoint(self):
+        # Audio alert endpoint returns json with alert and timestamp
+        res = self.app.get('/api/audio_alert')
+        self.assertEqual(res.status_code, 200)
+        data = json.loads(res.data)
+        self.assertIn('alert', data)
+        self.assertIn('timestamp', data)
 
 
 if __name__ == '__main__':
