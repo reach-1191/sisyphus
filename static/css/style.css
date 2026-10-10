@@ -1519,6 +1519,109 @@ html, body {
   margin-bottom: 24px;
 }
 
+/* Coach Insights Feedback Bento Card */
+.coach-insights-card {
+  background: #18181b !important;
+  border: 2px solid #facc15 !important;
+  border-radius: 20px !important;
+  color: #ffffff !important;
+  padding: 24px 28px !important;
+  margin-bottom: 24px !important;
+  box-shadow: 0 12px 30px -5px rgba(0, 0, 0, 0.45), 0 0 16px rgba(250, 204, 21, 0.16) !important;
+}
+
+.coach-insights-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(250, 204, 21, 0.25);
+}
+
+.coach-insights-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.coach-insights-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: rgba(250, 204, 21, 0.2);
+  border: 1px solid #facc15;
+  border-radius: 10px;
+  font-size: 1.2rem;
+  color: #facc15;
+}
+
+.coach-insights-heading {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: #ffffff !important;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.coach-insights-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.coach-insight-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  background: #27272a;
+  border: 1px solid rgba(250, 204, 21, 0.35);
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+
+.coach-insight-icon-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  background: #18181b;
+  border: 1px solid #facc15;
+  border-radius: 10px;
+  font-size: 1.25rem;
+}
+
+.coach-insight-text-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.coach-insight-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #facc15;
+}
+
+.coach-insight-body {
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: #ffffff !important;
+  line-height: 1.45;
+}
+
+@media (max-width: 768px) {
+  .coach-insights-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .analytics-stat-card {
   display: flex;
   flex-direction: column;

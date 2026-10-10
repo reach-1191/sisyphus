@@ -222,6 +222,98 @@ class ExerciseTrackerTestCase(unittest.TestCase):
         self.assertIn(b'Session Duration', res_summary.data)
         self.assertIn(b'Form Score', res_summary.data)
         self.assertIn(b'EXP Earned', res_summary.data)
+        # Verify Coach Insights Bento Card
+        self.assertIn(b'Coach Insights', res_summary.data)
+        self.assertIn(b'Positive Encouragement', res_summary.data)
+        self.assertIn(b'Technical Improvement Tip', res_summary.data)
+        self.assertIn(b'Squats: Drive knees outward over toes throughout descent.', res_summary.data)
+
+    def test_coach_insights_precision_over_90(self):
+        self.app.post('/login', data={'username': 'test_user', 'password': 'testpass123'})
+        res = self.app.post(
+            '/save_workout',
+            json={
+                'exercise_type': 'Squats',
+                'rep_count': 15,
+                'total_duration_seconds': 45.0,
+                'avg_form_accuracy': 95.0
+            }
+        )
+        session_id = json.loads(res.data)['session_id']
+        res_summary = self.app.get(f'/summary/{session_id}')
+        self.assertEqual(res_summary.status_code, 200)
+        self.assertIn(b'Precision: Flawless movement pattern. Maintain this rhythm next set.', res_summary.data)
+        self.assertIn(b'Outstanding effort!', res_summary.data)
+
+    def test_coach_insights_pushups_and_curls_tips(self):
+        self.app.post('/login', data={'username': 'test_user', 'password': 'testpass123'})
+        # Push-ups with score < 75
+        res_push = self.app.post(
+            '/save_workout',
+            json={
+                'exercise_type': 'Push-Ups',
+                'rep_count': 8,
+                'total_duration_seconds': 25.0,
+                'avg_form_accuracy': 65.0
+            }
+        )
+        sid_push = json.loads(res_push.data)['session_id']
+        res_summary_push = self.app.get(f'/summary/{sid_push}')
+        self.assertIn(b'Push-ups: Keep spine neutral from neck to ankles.', res_summary_push.data)
+
+        # Curls with score < 75
+        res_curl = self.app.post(
+            '/save_workout',
+            json={
+                'exercise_type': 'Dumbbell Curls',
+                'rep_count': 10,
+                'total_duration_seconds': 30.0,
+                'avg_form_accuracy': 70.0
+            }
+        )
+        sid_curl = json.loads(res_curl.data)['session_id']
+        res_summary_curl = self.app.get(f'/summary/{sid_curl}')
+        self.assertIn(b'Curls: Pin elbows against your ribs.', res_summary_curl.data)
+
+    def test_coach_insights_tone_and_word_count_rules(self):
+        self.app.post('/login', data={'username': 'test_user', 'password': 'testpass123'})
+        prohibited_phrases = ["not bad", "not terrible", "not uncommon", "no small feat", "not great", "not poor"]
+        
+        test_cases = [
+            ('Squats', 95.0),
+            ('Squats', 85.0),
+            ('Squats', 65.0),
+            ('Push-Ups', 92.0),
+            ('Push-Ups', 80.0),
+            ('Push-Ups', 60.0),
+            ('Dumbbell Curls', 96.0),
+            ('Dumbbell Curls', 78.0),
+            ('Dumbbell Curls', 55.0),
+        ]
+        
+        for exercise, score in test_cases:
+            res = self.app.post(
+                '/save_workout',
+                json={
+                    'exercise_type': exercise,
+                    'rep_count': 10,
+                    'total_duration_seconds': 30.0,
+                    'avg_form_accuracy': score
+                }
+            )
+            sid = json.loads(res.data)['session_id']
+            res_summary = self.app.get(f'/summary/{sid}')
+            html_text = res_summary.data.decode('utf-8')
+            
+            # Extract Coach Insights section
+            self.assertIn('Coach Insights', html_text)
+            self.assertIn('Positive Encouragement', html_text)
+            self.assertIn('Technical Improvement Tip', html_text)
+            
+            # Check litotes prohibition
+            lower_html = html_text.lower()
+            for forbidden in prohibited_phrases:
+                self.assertNotIn(forbidden, lower_html)
 
     def test_save_workout_computed_form_accuracy(self):
         self.app.post('/login', data={'username': 'test_user', 'password': 'testpass123'})

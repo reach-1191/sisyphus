@@ -3098,6 +3098,41 @@ def summary(session_id):
             "tag": "Controlled Tempo"
         })
 
+    # Dynamic 'Coach Insights' Feedback Generation
+    # 1. Positive Encouragement (Ultra-concise, celebrating performance, strictly affirmative)
+    if score >= 90:
+        coach_encouragement = "Outstanding effort! Elite execution throughout the entire workout."
+    elif score >= 80:
+        coach_encouragement = "Solid power output throughout the entire set!"
+    elif score >= 70:
+        coach_encouragement = "Strong determination and consistent drive on every rep!"
+    else:
+        coach_encouragement = "Fierce dedication! Keep pushing your limits every session."
+
+    # 2. Technical Improvement Tip (Actionable correction based on form errors / accuracy)
+    if score >= 90:
+        coach_tip = "Precision: Flawless movement pattern. Maintain this rhythm next set."
+    elif "squat" in ex_lower:
+        if score < 75:
+            coach_tip = "Squats: Sink hips two inches deeper at the bottom."
+        else:
+            coach_tip = "Squats: Drive knees outward over toes throughout descent."
+    elif "push" in ex_lower:
+        if score < 75:
+            coach_tip = "Push-ups: Keep spine neutral from neck to ankles."
+        else:
+            coach_tip = "Push-ups: Tuck elbows closer to ribs on descent."
+    elif "curl" in ex_lower:
+        if score < 75:
+            coach_tip = "Curls: Pin elbows against your ribs."
+        else:
+            coach_tip = "Curls: Squeeze biceps at peak and lower smoothly."
+    else:
+        if score < 75:
+            coach_tip = "Form: Move smoothly through the full range of motion."
+        else:
+            coach_tip = "Form: Maintain core bracing through each repetition."
+
     exp_earned = max(10, session_record.rep_count * 10) + (50 if score >= 90 else (25 if score >= 75 else 0))
     user_exp = current_user.exp or 0
     user_level = current_user.level or 1
@@ -3123,6 +3158,8 @@ def summary(session_id):
         badge_class=badge_class,
         badge_color=badge_color,
         insights=insights,
+        coach_encouragement=coach_encouragement,
+        coach_tip=coach_tip,
         exp_earned=exp_earned,
         user_level=user_level,
         user_exp=user_exp,

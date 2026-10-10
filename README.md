@@ -6,7 +6,7 @@
 [![Flask](https://img.shields.io/badge/Flask-3.1.3-black.svg)](https://palletsprojects.com/p/flask/)
 [![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10.14-00A67E.svg)](https://developers.google.com/mediapipe)
 [![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED.svg?logo=docker&logoColor=white)](Dockerfile)
-[![Tests](https://img.shields.io/badge/Tests-19%20Passing-brightgreen.svg)](test_app.py)
+[![Tests](https://img.shields.io/badge/Tests-22%20Passing-brightgreen.svg)](test_app.py)
 [![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Site-blue.svg?logo=github)](https://reach-1191.github.io/sisyphus/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -20,6 +20,7 @@ Try it here: [Sisyphus](https://shorturl.at/O34T1)
 
 - 🐳 **Docker Containerization**: Full production-ready `Dockerfile` (Python 3.10-slim with OpenCV/FFmpeg system libraries) and `.dockerignore` for single-command builds and isolated deployment on any cloud or container platform.
 - 📊 **Post-Workout Form Analytics & Coach Summary (`/summary/<session_id>`)**:
+  - **Dynamic 'Coach Insights' Feedback Card**: Prominent Bento card styled in dark charcoal (`#18181b`) with vibrant warm yellow accent borders (`#facc15`), providing ultra-concise, affirmative **Positive Encouragement** and actionable **Technical Improvement Tips** tailored per exercise (under 12 words per sentence, strictly prohibiting litotes or double negatives). Displays flawless precision guidance when session accuracy reaches or exceeds 90%.
   - **Form Status Rating**: Classifies movement quality into **Optimal** (≥ 85%), **Moderate** (70–84%), or **Needs Adjustment** (< 70%).
   - **Biomechanical Precision Feedback**: Exercise-specific movement reviews (depth consistency, joint alignment, descent tempo, spinal plank alignment, tucked elbow flare protection, peak bicep contraction, and eccentric control).
   - **Frame-Accurate Form Score**: Dynamically calculated using valid repetition frame ratios against flagged kinematic warnings:
@@ -34,7 +35,7 @@ Try it here: [Sisyphus](https://shorturl.at/O34T1)
 - 📹 **Optimized Headless Demo Fallbacks**:
   - High-definition fallback demo videos for all three supported exercises (`squat_demo.mp4`, `pushup_demo.mp4`, `dumbbell_demo.mp4`), enabling out-of-the-box testing without a webcam.
 - 🧪 **Comprehensive Automated Test Suite**:
-  - 19 automated unit and integration tests in `test_app.py` covering kinematics, EMA smoothing, auth flows, camera lifecycle, EXP/badges, audio alerts, and summary views.
+  - 22 automated unit and integration tests in `test_app.py` covering kinematics, EMA smoothing, auth flows, camera lifecycle, EXP/badges, audio alerts, and summary views.
 
 ---
 
@@ -158,7 +159,7 @@ sisyphus/
 ├── _config.yml                 # Jekyll configuration for GitHub Pages deployment
 ├── requirements.txt            # Pinned production dependencies (Flask, MediaPipe, OpenCV, SQLAlchemy)
 ├── setup.sh                    # Automated environment, virtualenv, and database provisioning script
-├── test_app.py                 # 19 automated unit & integration tests validating math, routes, and DB
+├── test_app.py                 # 22 automated unit & integration tests validating math, routes, and DB
 ├── pose_landmarker_lite.task   # MediaPipe Vision Task pose estimation model asset
 ├── dumbbell_demo.mp4           # Dumbbell Curl headless demo video fallback
 ├── pushup_demo.mp4             # Push-Up headless demo video fallback
@@ -205,7 +206,7 @@ sisyphus/
 
 ## Running Automated Tests
 
-A comprehensive suite of 19 unit and integration tests verifies the pose calculation pipeline, EMA smoothing, route protection, camera hardware control, EXP progression, and summary view generation:
+A comprehensive suite of 22 unit and integration tests verifies the pose calculation pipeline, EMA smoothing, route protection, camera hardware control, EXP progression, Coach Insights feedback logic, and summary view generation:
 
 ```bash
 source .venv/bin/activate
@@ -214,7 +215,7 @@ python test_app.py
 
 Expected output:
 ```text
-Ran 19 tests in 1.711s
+Ran 22 tests in 1.929s
 
 OK
 ```

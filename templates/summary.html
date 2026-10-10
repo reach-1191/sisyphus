@@ -62,6 +62,37 @@
     </div>
   </div>
 
+  <!-- Dynamic 'Coach Insights' Feedback Bento Card -->
+  <div class="bento-card coach-insights-card" style="background: #18181b; border: 2px solid #facc15; border-radius: 20px; color: #ffffff; padding: 24px 28px; margin-bottom: 24px;">
+    <div class="coach-insights-header">
+      <div class="coach-insights-title-group">
+        <span class="coach-insights-badge">⚡</span>
+        <h2 class="coach-insights-heading">Coach Insights</h2>
+      </div>
+      <span class="pill-tag pill-yellow">AI Coaching</span>
+    </div>
+
+    <div class="coach-insights-grid">
+      <!-- Positive Encouragement -->
+      <div class="coach-insight-item">
+        <div class="coach-insight-icon-box">🏆</div>
+        <div class="coach-insight-text-group">
+          <div class="coach-insight-label">Positive Encouragement</div>
+          <div class="coach-insight-body">{{ coach_encouragement }}</div>
+        </div>
+      </div>
+
+      <!-- Technical Improvement Tip -->
+      <div class="coach-insight-item">
+        <div class="coach-insight-icon-box">🎯</div>
+        <div class="coach-insight-text-group">
+          <div class="coach-insight-label">Technical Improvement Tip</div>
+          <div class="coach-insight-body">{{ coach_tip }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Form Review Panel -->
   <div class="form-review-panel bento-card">
     <div class="form-review-header">
