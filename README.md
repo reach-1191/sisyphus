@@ -12,7 +12,7 @@
 
 **Sisyphus AI** is an intelligent fitness companion designed to elevate your personal training. Combining state-of-the-art computer vision pose estimation with real-time biometric analysis and client-side vocal coaching, Sisyphus tracks your workout form rep-by-rep, detects kinematic faults before they lead to injury, and turns fitness into an addictive RPG leveling experience.
 
-Try it here: [Sisyphus Live App](https://suse-objectives-nuclear-longitude.trycloudflare.com)
+Try it here: [Sisyphus Live App](https://sisyphus-783417011137.northamerica-northeast1.run.app/workout?exercise=pushup)
 
 ---
 
