@@ -1,0 +1,20 @@
+title: Sisyphus AI Coach
+description: Real-time AI pose tracking, form correction, and gamified workout dashboard powered by MediaPipe and Flask.
+theme: jekyll-theme-primer
+plugins:
+  - jekyll-seo-tag
+exclude:
+  - .venv/
+  - __pycache__/
+  - .git/
+  - Dockerfile
+  - .dockerignore
+  - setup.sh
+  - test_app.py
+  - app.py
+  - workout_data.db
+  - pose_landmarker_lite.task
+  - dumbbell_demo.mp4
+  - pushup_demo.mp4
+  - squat_demo.mp4
+  - sample_squat.mp4
