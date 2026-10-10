@@ -179,9 +179,9 @@ def ema_filter(current_val, prev_val, alpha=0.35):
 class ExerciseTracker:
     def __init__(self, model_path=MODEL_PATH):
         self.lock = threading.Lock()
-        self.exercise = "squat"  # "squat" or "pushup"
+        self.exercise = "squat"  # "squat", "pushup", or "curl"
         self.counter = 0
-        self.stage = "up"        # "up" or "down"
+        self.stage = "up"        # "up" or "down" (for curl: "down"=extended, "up"=curled)
 
         # Filtered Joint Angles
         self.smoothed_primary_angle = 180.0
@@ -198,12 +198,13 @@ class ExerciseTracker:
         self.warning_flags = []
 
         # Smart Audio Feedback: ONLY set on form errors
-        # Silent on movement updates, mode switches, resets, and successful reps
+        # Silent on movement updates, starting positions, and successful reps
         self.audio_event = None
         self.vocal_message = ""
         self.last_audio_trigger_time = 0.0
 
         self.min_angle_in_rep = 180.0
+        self.max_angle_in_rep = 180.0
         self.active_side = "right"
         self.last_rep_time = 0
 
@@ -220,10 +221,10 @@ class ExerciseTracker:
 
     def set_exercise(self, ex):
         with self.lock:
-            if ex in ["squat", "pushup"] and ex != self.exercise:
+            if ex in ["squat", "pushup", "curl"] and ex != self.exercise:
                 self.exercise = ex
                 self.counter = 0
-                self.stage = "up"
+                self.stage = "down" if ex == "curl" else "up"
                 self.form_score = 100
                 self.form_scores_history.clear()
                 self.session_start_time = time.time()
@@ -231,23 +232,27 @@ class ExerciseTracker:
                 self.smoothed_primary_angle = 180.0
                 self.smoothed_secondary_angle = 180.0
                 self.smoothed_flare_angle = 0.0
+                self.min_angle_in_rep = 180.0
+                self.max_angle_in_rep = 180.0
                 self.warning_flags.clear()
                 self.feedback = f"{ex.capitalize()} mode activated"
-                # SILENT: No speech on exercise change
+                # SILENT: No vocal alerts on mode switch
                 self.audio_event = None
                 self.vocal_message = ""
 
     def reset_reps(self):
         with self.lock:
             self.counter = 0
-            self.stage = "up"
+            self.stage = "down" if self.exercise == "curl" else "up"
             self.form_score = 100
             self.form_scores_history.clear()
             self.session_start_time = time.time()
             self.rep_score_deductions.clear()
+            self.min_angle_in_rep = 180.0
+            self.max_angle_in_rep = 180.0
             self.warning_flags.clear()
             self.feedback = "Counter reset to 0."
-            # SILENT: No speech on reset
+            # SILENT: No vocal alerts on reset
             self.audio_event = None
             self.vocal_message = ""
 
@@ -296,8 +301,10 @@ class ExerciseTracker:
 
                 if self.exercise == "squat":
                     audio_ev, vocal_msg = self._process_squat(landmarks, w, h)
-                else:
+                elif self.exercise == "pushup":
                     audio_ev, vocal_msg = self._process_pushup(landmarks, w, h)
+                else:
+                    audio_ev, vocal_msg = self._process_curl(landmarks, w, h)
 
                 self._draw_skeleton(frame, landmarks, w, h)
             else:
@@ -433,8 +440,8 @@ class ExerciseTracker:
         """
         Push-up tracking:
         Speaks ONLY on specific form errors:
+          - Sagging back / hip alignment: 'Raise your hips!'
           - Chest fail: 'Lower your chest!'
-          - Spine sag: 'Keep your back straight!'
         Silent on standard movement and rep counts.
         """
         l_shoulder = [landmarks[11].x * w, landmarks[11].y * h]
@@ -460,6 +467,7 @@ class ExerciseTracker:
             self.active_side = "left"
 
         raw_elbow_angle = calculate_angle(shoulder, elbow, wrist)
+        # Track alignment between Shoulder, Hip, and Ankle
         raw_spine_angle = calculate_angle(shoulder, hip, ankle)
         raw_flare_angle = calculate_elbow_flare(shoulder, hip, elbow)
 
@@ -471,10 +479,11 @@ class ExerciseTracker:
         spine_angle = self.smoothed_secondary_angle
         flare_angle = self.smoothed_flare_angle
 
+        # Sagging back check: Hip-Shoulder-Ankle angle too low (< 160 deg)
         back_sags = False
         if spine_angle < 160.0:
             back_sags = True
-            self.warning_flags.append("Hips sagging or piked! Keep straight plank.")
+            self.warning_flags.append("Hips sagging! Raise your hips to keep straight plank.")
             self.rep_score_deductions.add("spine_sag")
 
         elbow_flare = False
@@ -508,7 +517,7 @@ class ExerciseTracker:
                 self.rep_score_deductions.add("shallow_chest")
 
             if back_sags:
-                self.feedback = "Keep core tight! Do not sag back"
+                self.feedback = "Hips sagging! Raise hips to keep straight plank"
 
             # Rep Completion: Visual update only (SILENT: no audio)
             if elbow_angle >= UP_THRESH:
@@ -531,7 +540,7 @@ class ExerciseTracker:
                 if deductions == 0:
                     self.feedback = f"Rep #{self.counter} Complete! Solid Form (100%)"
                 else:
-                    critique = "Chest lower next time." if "shallow_chest" in self.rep_score_deductions else "Keep body straight."
+                    critique = "Raise hips next time." if "spine_sag" in self.rep_score_deductions else "Lower chest next time."
                     self.feedback = f"Rep #{self.counter} Complete ({rep_score}% Form) - {critique}"
 
                 # ZERO speech on rep completion
@@ -542,10 +551,101 @@ class ExerciseTracker:
         if audio_ev is None:
             if back_sags:
                 audio_ev = "warn_back"
-                vocal_msg = "Keep your back straight!"
+                vocal_msg = "Raise your hips!"
             elif self.stage == "down" and elbow_angle < 120.0 and self.min_angle_in_rep > 105.0:
                 audio_ev = "warn_chest"
                 vocal_msg = "Lower your chest!"
+
+        return audio_ev, vocal_msg
+
+    def _process_curl(self, landmarks, w, h):
+        """
+        Dumbbell Curls tracking:
+        Track left/right arm angle (Shoulder-Elbow-Wrist).
+        Increment rep count when moving from extension (>160 degrees) to full curl (<30 degrees).
+        Vocal warning on form error: 'Full extension required!'
+        """
+        l_shoulder = [landmarks[11].x * w, landmarks[11].y * h]
+        l_elbow = [landmarks[13].x * w, landmarks[13].y * h]
+        l_wrist = [landmarks[15].x * w, landmarks[15].y * h]
+
+        r_shoulder = [landmarks[12].x * w, landmarks[12].y * h]
+        r_elbow = [landmarks[14].x * w, landmarks[14].y * h]
+        r_wrist = [landmarks[16].x * w, landmarks[16].y * h]
+
+        l_vis = getattr(landmarks[13], 'visibility', 1.0)
+        r_vis = getattr(landmarks[14], 'visibility', 1.0)
+
+        if r_vis >= l_vis:
+            shoulder, elbow, wrist = r_shoulder, r_elbow, r_wrist
+            self.active_side = "right"
+        else:
+            shoulder, elbow, wrist = l_shoulder, l_elbow, l_wrist
+            self.active_side = "left"
+
+        raw_arm_angle = calculate_angle(shoulder, elbow, wrist)
+        self.smoothed_primary_angle = ema_filter(raw_arm_angle, self.smoothed_primary_angle, alpha=0.35)
+        arm_angle = self.smoothed_primary_angle
+
+        # Secondary stat: target curl angle
+        self.smoothed_secondary_angle = 30.0
+
+        audio_ev = None
+        vocal_msg = None
+
+        # Dumbbell Curls State Machine:
+        # stage == "down": arm extending/extended (starts towards >160°)
+        # stage == "up": reached full curl (<30°)
+        if self.stage == "down":
+            self.max_angle_in_rep = max(self.max_angle_in_rep, arm_angle)
+            
+            # Check for lack of full extension if user starts curling before arm opens
+            if arm_angle < 110.0 and self.max_angle_in_rep < 155.0:
+                self.warning_flags.append("Incomplete extension! Fully lower dumbbell.")
+                self.rep_score_deductions.add("incomplete_extension")
+                audio_ev = "warn_extension"
+                vocal_msg = "Full extension required!"
+
+            if arm_angle <= 30.0:
+                # Reached peak contraction / full curl (< 30 deg)
+                self.stage = "up"
+                self.min_angle_in_rep = arm_angle
+                self.feedback = "Peak Curl! Now lower with control"
+            elif arm_angle < 90.0:
+                self.feedback = "Curling up... Target < 30°"
+            else:
+                self.feedback = "Arm extended. Begin curl"
+
+        elif self.stage == "up":
+            # Descending from curl to extension
+            if arm_angle >= 160.0:
+                # Rep completed on full extension (> 160 deg)
+                self.stage = "down"
+                self.counter += 1
+                self.last_rep_time = time.time()
+                self.max_angle_in_rep = arm_angle
+
+                deductions = 0
+                if "incomplete_extension" in self.rep_score_deductions:
+                    deductions += 30
+
+                rep_score = max(40, 100 - deductions)
+                self.form_scores_history.append(rep_score)
+                self.form_score = int(0.7 * self.form_score + 0.3 * rep_score)
+                self.rep_score_deductions.clear()
+
+                if deductions == 0:
+                    self.feedback = f"Rep #{self.counter} Complete! Full Extension & Curl (100%)"
+                else:
+                    self.feedback = f"Rep #{self.counter} Complete ({rep_score}% Form) - Full extension next time"
+
+                # ZERO speech on rep completion
+                audio_ev = None
+                vocal_msg = None
+            elif arm_angle > 80.0:
+                self.feedback = "Extending arm... Lower past 160°"
+            else:
+                self.feedback = "Lower arm with control"
 
         return audio_ev, vocal_msg
 
@@ -590,7 +690,13 @@ class ExerciseTracker:
         stage_col = (0, 255, 198) if self.stage == "down" else (245, 158, 11)
         cv2.putText(frame, self.stage.upper(), (115, 85), cv2.FONT_HERSHEY_SIMPLEX, 1.05, stage_col, 2, cv2.LINE_AA)
 
-        angle_title = "KNEE ANGLE" if self.exercise == "squat" else "ELBOW ANGLE"
+        if self.exercise == "squat":
+            angle_title = "KNEE ANGLE"
+        elif self.exercise == "pushup":
+            angle_title = "ELBOW ANGLE"
+        else:
+            angle_title = "ARM ANGLE"
+
         cv2.putText(frame, angle_title, (230, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (156, 163, 175), 1, cv2.LINE_AA)
         cv2.putText(frame, f"{int(self.smoothed_primary_angle)} deg", (230, 85), cv2.FONT_HERSHEY_SIMPLEX, 1.05, (255, 255, 255), 2, cv2.LINE_AA)
 
@@ -712,7 +818,6 @@ class VideoStreamManager:
             time.sleep(0.02)
 
 
-# Tracker & stream manager instances
 tracker = ExerciseTracker()
 stream_mgr = VideoStreamManager(tracker)
 
@@ -874,6 +979,7 @@ WORKOUT_BODY = """
         <select id="exercise-select" class="custom-select">
           <option value="squat" selected>Squats (Hip-Knee-Ankle)</option>
           <option value="pushup">Push-Ups (Chest & Spine)</option>
+          <option value="curl">Dumbbell Curls (Shoulder-Elbow-Wrist)</option>
         </select>
       </div>
 
@@ -1002,13 +1108,16 @@ WORKOUT_BODY = """
   // ----------------------------------------------------
   // SMART VOCAL FEEDBACK ENGINE:
   // - Speaks ONLY on specific form errors (warn_*)
+  //   * Squats: 'Squat deeper!' or 'Keep your knees out!'
+  //   * Push-ups: 'Lower your chest!' or 'Raise your hips!'
+  //   * Dumbbell Curls: 'Full extension required!'
   // - SILENT during good form, starting position, and successful rep counts
   // - Strict 4-second delay throttle between alerts
   // ----------------------------------------------------
   function speakFormError(errorMessage) {
     if (!voiceEnabled || !window.speechSynthesis || !errorMessage) return;
     const now = Date.now();
-    if (now - lastSpokenTime < 4000) return; // 4-second throttle
+    if (now - lastSpokenTime < 4000) return; // Strict 4-second debounce
 
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(errorMessage);
@@ -1056,12 +1165,18 @@ WORKOUT_BODY = """
       secondaryAngleLabel.textContent = "Target Depth";
       secondaryAngleVal.textContent = "≤ 100°";
       activeSideText.textContent = `Active: ${data.active_side === 'right' ? 'Right Leg' : 'Left Leg'}`;
-    } else {
+    } else if (data.exercise === "pushup") {
       primaryAngleLabel.textContent = "Elbow Angle";
       primaryAngleVal.textContent = Math.round(data.primary_angle) + "°";
       secondaryAngleLabel.textContent = "Spine Angle";
       secondaryAngleVal.textContent = Math.round(data.secondary_angle) + "°";
       activeSideText.textContent = `Flare: ${Math.round(data.flare_angle)}° (≤ 75°)`;
+    } else {
+      primaryAngleLabel.textContent = "Elbow Angle";
+      primaryAngleVal.textContent = Math.round(data.primary_angle) + "°";
+      secondaryAngleLabel.textContent = "Curl Target";
+      secondaryAngleVal.textContent = "< 30° / > 160°";
+      activeSideText.textContent = `Active: ${data.active_side === 'right' ? 'Right Arm' : 'Left Arm'}`;
     }
 
     const score = Math.max(0, Math.min(100, data.form_score));
@@ -1079,7 +1194,7 @@ WORKOUT_BODY = """
       feedbackAvatar.style.background = "var(--accent)";
     }
 
-    // Trigger speech ONLY on form errors ('Squat deeper!', 'Keep your knees out!', 'Lower your chest!', 'Keep your back straight!')
+    // Trigger speech ONLY on specific form errors with 4s debounce
     if (data.audio_event && data.audio_event.startsWith("warn_") && data.vocal_message) {
       speakFormError(data.vocal_message);
     }
@@ -1099,7 +1214,13 @@ WORKOUT_BODY = """
 
   exerciseSelect.addEventListener("change", async () => {
     const selected = exerciseSelect.value;
-    hiddenExerciseType.value = selected === 'squat' ? 'Squats' : 'Push-Ups';
+    if (selected === 'squat') {
+      hiddenExerciseType.value = 'Squats';
+    } else if (selected === 'pushup') {
+      hiddenExerciseType.value = 'Push-Ups';
+    } else {
+      hiddenExerciseType.value = 'Dumbbell Curls';
+    }
 
     await fetch("/set_exercise", {
       method: "POST",
@@ -1493,7 +1614,14 @@ def logout():
 def save_workout():
     """Save active workout session into SQLite for the logged-in user."""
     data = request.get_json(silent=True) or request.form
-    exercise_type = data.get('exercise_type', tracker.exercise.capitalize())
+    exercise_type = data.get('exercise_type')
+    if not exercise_type:
+        if tracker.exercise == 'squat':
+            exercise_type = 'Squats'
+        elif tracker.exercise == 'pushup':
+            exercise_type = 'Push-Ups'
+        else:
+            exercise_type = 'Dumbbell Curls'
 
     with tracker.lock:
         reps = tracker.counter
@@ -1591,7 +1719,7 @@ def status():
 
 @app.route('/set_exercise', methods=['POST'])
 def set_exercise():
-    """Switch active exercise between 'squat' and 'pushup'."""
+    """Switch active exercise between 'squat', 'pushup', and 'curl'."""
     data = request.get_json(silent=True) or request.form
     ex = data.get('exercise', 'squat')
     tracker.set_exercise(ex)
