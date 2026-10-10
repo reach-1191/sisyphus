@@ -1,0 +1,196 @@
+{% extends "layout.html" %}
+
+{% block title %}Workout Summary & Form Analytics - Sisyphus AI Coach{% endblock %}
+
+{% block content %}
+<div class="summary-container">
+  <!-- Hero Header -->
+  <div class="summary-hero-section">
+    <div class="summary-hero-badge">✓</div>
+    <h1 class="summary-title">Workout Completed!</h1>
+    <p class="summary-subtitle">
+      Outstanding discipline! Your movement mechanics and joint trajectory have been analyzed and scored.
+    </p>
+  </div>
+
+  <!-- Analytics Row: Total Reps, Session Duration, Form Score, and EXP Earned -->
+  <div class="analytics-row-grid">
+    <!-- Total Reps -->
+    <div class="bento-card analytics-stat-card">
+      <div class="stat-top-row">
+        <span class="stat-label">Total Reps</span>
+        <span class="stat-icon">🔥</span>
+      </div>
+      <div class="stat-figure analytics-figure-reps">{{ session.rep_count }}</div>
+      <span class="pill-tag pill-yellow">{{ session.exercise_type }}</span>
+    </div>
+
+    <!-- Session Duration -->
+    <div class="bento-card analytics-stat-card">
+      <div class="stat-top-row">
+        <span class="stat-label">Session Duration</span>
+        <span class="stat-icon">⏱️</span>
+      </div>
+      <div class="stat-figure">{{ session.total_duration_seconds | format_duration }}</div>
+      <span class="pill-tag pill-gray">Active Tracking</span>
+    </div>
+
+    <!-- Form Score -->
+    <div class="bento-card analytics-stat-card">
+      <div class="stat-top-row">
+        <span class="stat-label">Form Score</span>
+        <span class="stat-icon">🎯</span>
+      </div>
+      <div class="stat-figure analytics-figure-score" style="color: {{ badge_color }};">
+        {{ session.avg_form_accuracy }}%
+      </div>
+      <span class="pill-tag {{ badge_class }}">
+        {{ form_status }}
+      </span>
+    </div>
+
+    <!-- EXP Earned -->
+    <div class="bento-card analytics-stat-card">
+      <div class="stat-top-row">
+        <span class="stat-label">EXP Earned</span>
+        <span class="stat-icon">⚡</span>
+      </div>
+      <div class="stat-figure analytics-figure-exp">
+        +{{ exp_earned }} <span class="exp-sub">XP</span>
+      </div>
+      <span class="pill-tag pill-yellow">Level Progression</span>
+    </div>
+  </div>
+
+  <!-- Form Review Panel -->
+  <div class="form-review-panel bento-card">
+    <div class="form-review-header">
+      <div>
+        <div class="stat-label">Biomechanical Form Review</div>
+        <h2 class="form-review-title">Movement Precision & Coach Feedback</h2>
+      </div>
+      <div class="form-status-badge-wrap">
+        <span class="overall-score-pill" style="border-color: {{ badge_color }}; color: {{ badge_color }};">
+          Score: {{ session.avg_form_accuracy }}%
+        </span>
+        <span class="pill-tag {{ badge_class }} status-badge-large">
+          {{ form_status }}
+        </span>
+      </div>
+    </div>
+
+    <!-- Detailed Form Feedback Insights -->
+    <div class="form-insights-list">
+      <div class="stat-label" style="margin-bottom: 12px;">Detailed Biomechanical Insights:</div>
+      {% for insight in insights %}
+        <div class="insight-row">
+          <div class="insight-icon" style="background: rgba(250, 204, 21, 0.15); color: #854d0e;">
+            {% if loop.first %}✓{% elif loop.index == 2 %}⚡{% else %}💡{% endif %}
+          </div>
+          <div class="insight-text">
+            <strong>{{ insight.title }}</strong>
+            <p>{{ insight.detail }}</p>
+          </div>
+          <span class="pill-tag pill-gray insight-tag">{{ insight.tag }}</span>
+        </div>
+      {% endfor %}
+    </div>
+
+    <!-- Form Accuracy Gauge Bar -->
+    <div class="form-gauge-section">
+      <div class="form-gauge-labels">
+        <span>Form Accuracy Gauge</span>
+        <span style="font-family: 'JetBrains Mono', monospace; font-weight: 800; color: {{ badge_color }};">
+          {{ session.avg_form_accuracy }}%
+        </span>
+      </div>
+      <div class="form-gauge-track">
+        <div class="form-gauge-fill" style="width: {{ session.avg_form_accuracy }}%; background: {{ badge_color }};"></div>
+      </div>
+      <div class="gauge-scale-row">
+        <span>Needs Adjustment (&lt;70%)</span>
+        <span>Moderate (70-84%)</span>
+        <span>Optimal (85-100%)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Athlete Progression & Badges Unlocked Bento Row -->
+  <div class="summary-secondary-grid">
+    <!-- Level Progress Card -->
+    <div class="bento-card">
+      <div class="card-header-flex">
+        <span class="stat-label">Athlete Progression</span>
+        <span class="pill-tag pill-charcoal">Level {{ user_level }}</span>
+      </div>
+
+      <div class="profile-info-row" style="margin: 16px 0;">
+        <div class="profile-avatar-box">⚡</div>
+        <div>
+          <div class="profile-user-name">Level {{ user_level }} Athlete</div>
+          <div class="profile-user-role">{{ user_exp }} Total Lifetime EXP</div>
+        </div>
+      </div>
+
+      <div class="exp-progress-block">
+        <div class="exp-label-row">
+          <span>Level {{ user_level }} Progress</span>
+          <span class="exp-figures">{{ exp_in_level }} / 100 XP</span>
+        </div>
+        <div class="exp-track">
+          <div class="exp-fill exp-bar-animated" style="width: {{ exp_progress_pct }}%;"></div>
+        </div>
+        <div class="exp-needed-text">
+          {{ exp_needed }} XP needed to reach Level {{ user_level + 1 }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Badges Unlocked Card -->
+    <div class="bento-dark-card">
+      <div class="card-header-flex">
+        <div>
+          <h3 class="quests-heading">🏆 Session Badges</h3>
+          <p class="quests-subheading">Milestones earned during this workout</p>
+        </div>
+        <span class="pill-tag pill-yellow">{{ new_badges|length if new_badges else 0 }} New</span>
+      </div>
+
+      <div class="badges-scroll-list" style="margin-top: 14px;">
+        {% if new_badges %}
+          {% for b in new_badges %}
+            <div class="badge-list-item unlocked-item">
+              <div class="badge-item-left">
+                <div class="badge-icon-box">{{ b.icon }}</div>
+                <div>
+                  <div class="badge-name text-white">{{ b.name }}</div>
+                  <div class="badge-desc">{{ b.description }}</div>
+                </div>
+              </div>
+              <span class="pill-tag pill-unlocked">🎉 UNLOCKED!</span>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty-badges-box">
+            <span style="font-size: 1.8rem;">🛡️</span>
+            <div style="font-weight: 700; color: #ffffff; margin-top: 6px;">Keep Training!</div>
+            <p style="font-size: 0.78rem; color: #a1a1aa; margin-top: 2px;">
+              Maintain high form consistency to unlock Century Club, Iron Legs, and Form Perfectionist!
+            </p>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Navigation Action Buttons -->
+  <div class="summary-actions-row">
+    <a href="/dashboard" class="btn-yellow summary-action-btn">
+      <span>📊 Back to Dashboard</span>
+    </a>
+    <a href="/workout" class="btn-charcoal summary-action-btn">
+      <span>🏋️ Start Another Workout</span>
+    </a>
+  </div>
+</div>
+{% endblock %}

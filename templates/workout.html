@@ -1,51 +1,58 @@
 {% extends "layout.html" %}
+
+{% block title %}Live Workout - Sisyphus AI Coach{% endblock %}
+
+{% block content %}
 <!-- Modern Bento Box Workout Page Template -->
-<div style="display: grid; grid-template-columns: 1fr 390px; gap: 24px;">
+<div class="workout-layout" id="workout-container">
   <!-- Video Feed & Bento Setup Card -->
-  <div class="bento-card" style="padding: 24px; display: flex; flex-direction: column; gap: 18px;">
+  <div class="bento-card workout-video-card">
     <!-- Encapsulated Video Feed with Modern Floating Glassmorphism Camera HUD -->
-    <div style="position: relative; width: 100%; aspect-ratio: 16 / 9; background: #09090b; border-radius: 16px; overflow: hidden; border: 1px solid var(--card-border); box-shadow: inset 0 2px 8px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center;">
-      <img id="video-feed-img" src="/video_feed" alt="MediaPipe Tracking Feed" style="width: 100%; height: 100%; object-fit: contain; display: block;" />
+    <div class="video-feed-wrapper">
+      <img id="video-feed-img" src="/video_feed" alt="MediaPipe Tracking Feed" class="video-feed-img" />
 
       <!-- Top Floating Glassmorphism HUD Bar -->
-      <div style="position: absolute; top: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: center; pointer-events: none; z-index: 10;">
+      <div class="hud-bar hud-top-bar">
         <!-- Top Left: Exercise Mode & Phase Pill Badge -->
-        <div style="display: flex; align-items: center; gap: 10px; background: rgba(24, 24, 27, 0.75); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 6px 14px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);">
-          <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981;"></span>
-          <span id="hud-exercise-mode" style="color: #ffffff; font-weight: 700; font-size: 0.84rem; letter-spacing: 0.04em; text-transform: uppercase;">Squats</span>
-          <span id="hud-stage-pill" style="font-size: 0.72rem; font-weight: 800; padding: 2px 8px; border-radius: 8px; background: rgba(250, 204, 21, 0.2); color: #facc15; font-family: 'JetBrains Mono', monospace; transition: all 0.2s ease;">UP</span>
+        <div class="hud-pill-group">
+          <span class="hud-live-dot"></span>
+          <span id="hud-exercise-mode" class="hud-mode-text">Squats</span>
+          <span id="hud-stage-pill" class="hud-stage-pill">UP</span>
         </div>
 
-        <!-- Top Right: Rep Counter Pill Badge with Warm Yellow Typography -->
-        <div style="display: flex; align-items: center; gap: 8px; background: rgba(24, 24, 27, 0.75); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 6px 16px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);">
-          <span style="font-size: 0.7rem; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em;">REPS</span>
-          <span id="hud-rep-count" style="color: #facc15; font-size: 1.45rem; font-weight: 800; font-family: 'JetBrains Mono', monospace; line-height: 1; transition: transform 0.18s ease;">0</span>
+        <!-- Top Right: Rep Counter Pill Badge with Warm Yellow Accent Glow & Particle Burst Target -->
+        <div class="hud-pill-group hud-rep-pill" id="hud-rep-pill-container">
+          <span class="hud-rep-label">REPS</span>
+          <span id="hud-rep-count" class="hud-rep-val">0</span>
         </div>
       </div>
 
       <!-- Bottom Floating Glassmorphism HUD Bar: Form Status & Precision Metrics -->
-      <div style="position: absolute; bottom: 14px; left: 14px; right: 14px; display: flex; justify-content: space-between; align-items: center; pointer-events: none; z-index: 10; background: rgba(24, 24, 27, 0.75); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 8px 16px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);">
-        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-          <span id="hud-status-icon" style="font-size: 0.95rem;">⚡</span>
-          <span id="hud-form-status" style="color: #ffffff; font-size: 0.86rem; font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">Ready - Position body in frame</span>
+      <div class="hud-bar hud-bottom-bar">
+        <div class="hud-status-text-wrap">
+          <span id="hud-status-icon" class="hud-status-icon">⚡</span>
+          <span id="hud-form-status" class="hud-form-status-text">Ready - Position body in frame</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 10px; flex-shrink: 0; margin-left: 12px;">
-          <span id="hud-angle-pill" style="font-size: 0.78rem; font-weight: 700; color: #d1d5db; font-family: 'JetBrains Mono', monospace;">180°</span>
-          <span id="hud-score-pill" style="font-size: 0.78rem; font-weight: 800; color: #facc15; background: rgba(250, 204, 21, 0.18); padding: 3px 8px; border-radius: 8px; font-family: 'JetBrains Mono', monospace;">100%</span>
+        <div class="hud-metrics-wrap">
+          <span id="hud-angle-pill" class="hud-angle-pill">180°</span>
+          <span id="hud-score-pill" class="hud-score-pill">100%</span>
         </div>
       </div>
+
+      <!-- Canvas Overlay for Floating Rep Particles -->
+      <canvas id="rep-particles-canvas" class="particles-canvas"></canvas>
     </div>
 
     <!-- Mode Selector Bar (Warm Yellow Buttons & Pills) -->
-    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; background: #fbfbfb; padding: 14px 18px; border-radius: 16px; border: 1px solid var(--card-border);">
+    <div class="mode-selector-bar">
       <div>
-        <div style="font-size: 0.74rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">Exercise Mode</div>
-        <div class="exercise-pill-group" style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <div class="selector-heading">Exercise Mode</div>
+        <div class="exercise-pill-group">
           <button type="button" class="btn-mode-pill active" data-exercise="squat">🏋️ Squats</button>
           <button type="button" class="btn-mode-pill" data-exercise="pushup">💪 Push-ups</button>
           <button type="button" class="btn-mode-pill" data-exercise="curl">⚡ Dumbbell Curls</button>
         </div>
-        <!-- Hidden select for compatibility -->
+        <!-- Hidden select for backward compatibility -->
         <select id="exercise-select" style="display:none;">
           <option value="squat" selected>Squats</option>
           <option value="pushup">Push-Ups</option>
@@ -53,144 +60,142 @@
         </select>
       </div>
 
-      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+      <div class="source-control-wrap">
         <div>
-          <div style="font-size: 0.74rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">Video Source</div>
-          <select id="source-select" class="btn-ghost" style="padding: 7px 14px; font-weight: 600; cursor: pointer; outline: none;">
+          <div class="selector-heading">Video Source</div>
+          <select id="source-select" class="btn-ghost source-select-box">
             <option value="demo" selected>📹 Demo Video Engine</option>
-            <option value="webcam">🎥 Live Webcam (cv2.VideoCapture(0))</option>
-            <option value="browser_cam">💻 Browser Camera (getUserMedia)</option>
+            <option value="webcam">📷 Device Webcam (Cam 0)</option>
+            <option value="browser_cam">🌐 Browser Webcam (WebRTC)</option>
           </select>
         </div>
 
-        <div style="align-self: flex-end;">
-          <button id="btn-pause-camera" class="btn-ghost" style="padding: 8px 16px;">
-            <span id="pause-icon">⏸️</span> <span id="pause-text">Pause Camera</span>
-          </button>
-        </div>
+        <button type="button" id="btn-pause-camera" class="btn-ghost pause-camera-btn">
+          <span id="pause-icon">⏸️</span>
+          <span id="pause-text">Pause Feed</span>
+        </button>
       </div>
     </div>
   </div>
 
-  <!-- Live Stats Bento Panel -->
-  <div style="display: flex; flex-direction: column; gap: 18px;">
-    <!-- Reps Counter Bento Hero Card -->
-    <div class="bento-card" style="background: linear-gradient(135deg, #18181b, #09090b); color: #ffffff; border: 1px solid #27272a; position: relative; overflow: hidden;">
-      <div style="position: absolute; top: -20px; right: -20px; width: 100px; height: 100px; background: rgba(250, 204, 21, 0.15); border-radius: 50%; pointer-events: none;"></div>
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-size: 0.78rem; font-weight: 800; color: #a1a1aa; text-transform: uppercase; letter-spacing: 0.05em;">Repetitions</span>
-        <span id="phase-badge" class="pill-tag pill-yellow">UP</span>
+  <!-- Real-time HUD Control & Metric Bento Cards Panel -->
+  <div class="workout-sidebar">
+    <!-- Big Reps Counter Bento Card -->
+    <div class="bento-card rep-card-highlight" id="main-rep-box">
+      <div class="card-header-flex">
+        <span class="stat-label">COMPLETED REPETITIONS</span>
+        <span id="phase-badge" class="pill-tag pill-gray">UP</span>
       </div>
-      <div class="stat-figure" id="reps-num" style="color: #facc15; font-size: 4.6rem; margin: 12px 0; font-family: 'JetBrains Mono', monospace; line-height: 1;">0</div>
-      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; color: #a1a1aa; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
-        <span>Session Time: <strong id="session-timer-text" style="color: #ffffff; font-family: 'JetBrains Mono', monospace;">00:00</strong></span>
-        <span id="active-side-text">Right Leg</span>
-      </div>
-    </div>
-
-    <!-- Joint Angles Bento Grid -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
-      <div class="bento-card" style="padding: 16px;">
-        <span class="stat-label" id="primary-angle-label">Knee Angle</span>
-        <div class="stat-figure" id="primary-angle-val" style="font-size: 1.8rem; margin: 4px 0 0 0;">180°</div>
-      </div>
-      <div class="bento-card" style="padding: 16px;">
-        <span class="stat-label" id="secondary-angle-label">Target Angle</span>
-        <div class="stat-figure" id="secondary-angle-val" style="font-size: 1.8rem; margin: 4px 0 0 0; color: #854d0e;">≤ 100°</div>
+      <div id="reps-count" class="stat-figure rep-display-figure">0</div>
+      <div class="rep-card-footer">
+        <div class="timer-display-wrap">
+          <span class="timer-icon">⏱️</span>
+          <span id="session-timer" class="timer-text">00:00</span>
+        </div>
+        <span id="active-side-badge" class="active-side-text">Active: Right Side</span>
       </div>
     </div>
 
-    <!-- Form Score Card -->
-    <div class="bento-card" style="padding: 18px;">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span class="stat-label">Form Quality Score</span>
-        <span class="stat-figure" id="score-val" style="font-size: 1.6rem; margin: 0; color: var(--text-primary);">100%</span>
+    <!-- Real-time Movement Accuracy Score Card -->
+    <div class="bento-card">
+      <div class="card-header-flex">
+        <span class="stat-label">FORM ACCURACY SCORE</span>
+        <span id="score-val" class="score-percent-text">100%</span>
       </div>
-      <div style="width: 100%; height: 8px; background: #f4f4f5; border-radius: 9999px; overflow: hidden; margin-top: 10px; border: 1px solid #e5e7eb;">
-        <div id="score-bar" style="width: 100%; height: 100%; background: #facc15; border-radius: 9999px; transition: width 0.3s ease;"></div>
+      <div class="score-track-wrap">
+        <div id="score-bar" class="score-fill-bar" style="width: 100%;"></div>
+      </div>
+      <div class="angle-details-grid">
+        <div class="angle-box">
+          <span id="primary-angle-label" class="angle-label">Knee Angle</span>
+          <span id="primary-angle-val" class="angle-value">180°</span>
+        </div>
+        <div class="angle-box">
+          <span id="secondary-angle-label" class="angle-label">Target Depth</span>
+          <span id="secondary-angle-val" class="angle-value">≤ 100°</span>
+        </div>
       </div>
     </div>
 
-    <!-- Smart Vocal Feedback Bento Banner -->
-    <div class="bento-card" id="feedback-banner" style="background: rgba(250, 204, 21, 0.12); border-color: rgba(250, 204, 21, 0.4); display: flex; align-items: center; gap: 14px; padding: 16px;">
-      <div id="feedback-avatar" style="width: 40px; height: 40px; border-radius: 50%; background: #facc15; display: flex; align-items: center; justify-content: center; font-size: 1.15rem; color: #18181b; flex-shrink: 0; box-shadow: 0 2px 6px rgba(250, 204, 21, 0.3);">🗣️</div>
-      <div>
-        <div style="font-size: 0.72rem; text-transform: uppercase; color: var(--text-secondary); font-weight: 700; letter-spacing: 0.04em;">Smart Form Coach</div>
-        <div id="feedback-message" style="font-size: 0.92rem; font-weight: 700; color: var(--text-primary); margin-top: 2px;">Ready - Position body in frame</div>
+    <!-- AI Coach Real-Time Feedback Card -->
+    <div class="bento-card">
+      <div class="coach-card-header">
+        <span class="stat-label">AI COACH FEEDBACK</span>
+        <div class="audio-controls-wrap">
+          <button type="button" id="btn-start-session" class="btn-yellow session-audio-btn" title="Unlock Browser Voice & Chimes">
+            <span>🔊</span>
+            <span class="btn-label-text">Audio Ready</span>
+          </button>
+          <button type="button" id="btn-voice-toggle" class="btn-ghost voice-toggle-btn" title="Toggle Spoken Vocal Corrections">
+            <span>🗣️</span>
+            <span id="voice-label" class="btn-label-text">Errors Only</span>
+          </button>
+        </div>
       </div>
-    </div>
 
-    <!-- Action Buttons -->
-    <div style="display: flex; gap: 10px; flex-direction: column;">
-      <button type="button" id="btn-start-session" class="btn-yellow" style="width: 100%; padding: 12px; font-size: 0.9rem; display: flex; align-items: center; justify-content: center; gap: 8px;">
-        <span>▶️</span> <span>Start Session / Enable Audio</span>
-      </button>
+      <div id="feedback-banner" class="coach-banner-box">
+        <div id="feedback-avatar" class="coach-avatar">⚡</div>
+        <div id="feedback-msg" class="coach-message">Ready - Position body in frame to start repetition tracking</div>
+      </div>
 
-      <form action="/save_workout" method="POST" id="workout-save-form">
-        <input type="hidden" name="exercise_type" id="hidden-exercise-type" value="Squats">
-        <input type="hidden" name="rep_count" id="hidden-rep-count" value="0">
-        <input type="hidden" name="total_duration_seconds" id="hidden-duration" value="0">
-        <input type="hidden" name="avg_form_accuracy" id="hidden-accuracy" value="100">
-        <button type="submit" class="btn-charcoal" style="width: 100%; padding: 13px; font-size: 0.92rem; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
-          💾 Finish & Save Workout
-        </button>
-      </form>
+      <!-- Action Buttons Row -->
+      <div class="workout-actions-block">
+        <form action="/save_workout" method="POST" id="workout-save-form">
+          <input type="hidden" name="exercise_type" id="hidden-exercise" value="Squats">
+          <input type="hidden" name="rep_count" id="hidden-reps" value="0">
+          <input type="hidden" name="total_duration_seconds" id="hidden-duration" value="0">
+          <input type="hidden" name="avg_form_accuracy" id="hidden-accuracy" value="100">
+          <button type="submit" class="btn-yellow save-workout-submit-btn">
+            <span>✓ Finish & Save Workout</span>
+          </button>
+        </form>
 
-      <div style="display: flex; gap: 10px;">
-        <button id="btn-voice-toggle" class="btn-ghost" style="flex: 1;">
-          <span id="voice-icon">🎙️</span> <span id="voice-label">Vocal: ON (Errors Only)</span>
-        </button>
-        <button id="btn-reset" class="btn-ghost" style="flex: 1;">
-          🔄 Reset Reps
+        <button type="button" id="btn-reset-session" class="btn-ghost reset-session-btn">
+          <span>🔄</span>
+          <span>Reset Reps</span>
         </button>
       </div>
     </div>
   </div>
 </div>
+{% endblock %}
 
-<video id="client-webcam" playsinline autoplay muted style="display:none;"></video>
-<canvas id="capture-canvas" style="display:none;"></canvas>
-
+{% block extra_scripts %}
 <script>
+  let lastRepCount = null;
+  let currentAccuracy = 100.0;
+  let currentDuration = 0.0;
   let voiceEnabled = true;
   let lastSpokenTime = 0;
-  let lastRepCount = null;
-  let currentDuration = 0;
-  let currentAccuracy = 100;
-  let lastAlertTimestamp = Date.now() / 1000;
   let audioUnlocked = false;
-  let currentInputSource = "demo";
-  let isCapturing = false;
-  let webcamStream = null;
-  let currentBlobUrl = null;
-  let isCameraPaused = false;
   let audioCtx = null;
+  let isCameraPaused = false;
   let selectedVoice = null;
+  let lastAlertTimestamp = 0;
 
-  const repsEl = document.getElementById("reps-num");
+  // DOM Elements
+  const repsEl = document.getElementById("reps-count");
+  const mainRepBox = document.getElementById("main-rep-box");
+  const scoreValEl = document.getElementById("score-val");
+  const scoreBarEl = document.getElementById("score-bar");
   const phaseBadgeEl = document.getElementById("phase-badge");
-  const sessionTimerEl = document.getElementById("session-timer-text");
+  const sessionTimerEl = document.getElementById("session-timer");
   const primaryAngleLabel = document.getElementById("primary-angle-label");
   const primaryAngleVal = document.getElementById("primary-angle-val");
   const secondaryAngleLabel = document.getElementById("secondary-angle-label");
   const secondaryAngleVal = document.getElementById("secondary-angle-val");
-  const scoreValEl = document.getElementById("score-val");
-  const scoreBarEl = document.getElementById("score-bar");
+  const activeSideText = document.getElementById("active-side-badge");
+  const feedbackMsg = document.getElementById("feedback-msg");
   const feedbackBanner = document.getElementById("feedback-banner");
   const feedbackAvatar = document.getElementById("feedback-avatar");
-  const feedbackMsg = document.getElementById("feedback-message");
-  const activeSideText = document.getElementById("active-side-text");
+  const videoFeedImg = document.getElementById("video-feed-img");
   const exerciseSelect = document.getElementById("exercise-select");
   const sourceSelect = document.getElementById("source-select");
   const btnVoiceToggle = document.getElementById("btn-voice-toggle");
   const voiceLabel = document.getElementById("voice-label");
-  const btnReset = document.getElementById("btn-reset");
-  const videoFeedImg = document.getElementById("video-feed-img");
-  const clientWebcam = document.getElementById("client-webcam");
-  const captureCanvas = document.getElementById("capture-canvas");
-  const captureCtx = captureCanvas.getContext("2d");
-  const hiddenExerciseType = document.getElementById("hidden-exercise-type");
-  const hiddenRepCount = document.getElementById("hidden-rep-count");
+  const btnResetSession = document.getElementById("btn-reset-session");
+  const hiddenExercise = document.getElementById("hidden-exercise");
+  const hiddenRepCount = document.getElementById("hidden-reps");
   const hiddenDuration = document.getElementById("hidden-duration");
   const hiddenAccuracy = document.getElementById("hidden-accuracy");
   const btnPauseCamera = document.getElementById("btn-pause-camera");
@@ -200,14 +205,81 @@
   const btnStartSession = document.getElementById("btn-start-session");
   const workoutSaveForm = document.getElementById("workout-save-form");
 
-  // Modern Floating Glassmorphism Camera HUD Elements
+  // Floating HUD Elements
   const hudExerciseMode = document.getElementById("hud-exercise-mode");
   const hudStagePill = document.getElementById("hud-stage-pill");
   const hudRepCount = document.getElementById("hud-rep-count");
+  const hudRepPillContainer = document.getElementById("hud-rep-pill-container");
   const hudStatusIcon = document.getElementById("hud-status-icon");
   const hudFormStatus = document.getElementById("hud-form-status");
   const hudAnglePill = document.getElementById("hud-angle-pill");
   const hudScorePill = document.getElementById("hud-score-pill");
+
+  // Rep Particles Canvas
+  const particlesCanvas = document.getElementById("rep-particles-canvas");
+  const pCtx = particlesCanvas ? particlesCanvas.getContext("2d") : null;
+  let particles = [];
+
+  function resizeParticlesCanvas() {
+    if (particlesCanvas && particlesCanvas.parentElement) {
+      particlesCanvas.width = particlesCanvas.parentElement.clientWidth;
+      particlesCanvas.height = particlesCanvas.parentElement.clientHeight;
+    }
+  }
+  window.addEventListener("resize", resizeParticlesCanvas);
+  resizeParticlesCanvas();
+
+  // Particle burst animation on rep increment
+  function triggerRepParticleBurst() {
+    if (!particlesCanvas || !pCtx) return;
+    resizeParticlesCanvas();
+    const cx = particlesCanvas.width - 70;
+    const cy = 35;
+    const count = 28;
+    const colors = ["#facc15", "#fde047", "#ffffff", "#eab308", "#f59e0b"];
+
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5;
+      const speed = Math.random() * 5 + 3;
+      particles.push({
+        x: cx,
+        y: cy,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        radius: Math.random() * 3.5 + 2,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        alpha: 1.0,
+        decay: Math.random() * 0.03 + 0.02
+      });
+    }
+  }
+
+  function renderParticles() {
+    if (!particlesCanvas || !pCtx) return;
+    pCtx.clearRect(0, 0, particlesCanvas.width, particlesCanvas.height);
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.12; // subtle gravity
+      p.alpha -= p.decay;
+      if (p.alpha <= 0) {
+        particles.splice(i, 1);
+        continue;
+      }
+      pCtx.save();
+      pCtx.globalAlpha = p.alpha;
+      pCtx.fillStyle = p.color;
+      pCtx.shadowBlur = 8;
+      pCtx.shadowColor = p.color;
+      pCtx.beginPath();
+      pCtx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      pCtx.fill();
+      pCtx.restore();
+    }
+    requestAnimationFrame(renderParticles);
+  }
+  requestAnimationFrame(renderParticles);
 
   function formatTime(totalSec) {
     const s = Math.floor(totalSec || 0);
@@ -216,7 +288,7 @@
     return (mins < 10 ? "0" : "") + mins + ":" + (secs < 10 ? "0" : "") + secs;
   }
 
-  // Web Audio API for Crisp Rep Chime Feedback
+  // Web Audio Rep Chime
   function getAudioContext() {
     if (!audioCtx) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -239,30 +311,26 @@
       const gain = ctx.createGain();
 
       osc.type = "sine";
-      // Crisp 880Hz high-frequency synthesized sine wave chime/ding
       osc.frequency.setValueAtTime(880, now);
 
       gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.3, now + 0.012);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+      gain.gain.exponentialRampToValueAtTime(0.35, now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
 
       osc.connect(gain);
       gain.connect(ctx.destination);
 
       osc.start(now);
-      osc.stop(now + 0.28);
+      osc.stop(now + 0.3);
     } catch (e) {
       console.warn("Web Audio chime error:", e);
     }
   }
 
-  // Query browser voices and prioritize natural/premium human-like voices
   function loadBestVoice() {
     if (!window.speechSynthesis) return;
     const voices = window.speechSynthesis.getVoices();
     if (!voices || voices.length === 0) return;
-
-    // Prioritize natural/premium voices: search for voices containing 'Google', 'Natural', 'Samantha', 'Karen', or 'Daniel'
     const priorityKeywords = ['Google', 'Natural', 'Samantha', 'Karen', 'Daniel'];
     for (const kw of priorityKeywords) {
       const match = voices.find(v => v.lang && v.lang.startsWith("en") && v.name.includes(kw));
@@ -271,16 +339,7 @@
         return;
       }
     }
-    for (const kw of priorityKeywords) {
-      const match = voices.find(v => v.name.includes(kw));
-      if (match) {
-        selectedVoice = match;
-        return;
-      }
-    }
-    const defaultEn = voices.find(v => v.lang === "en-US" || v.lang === "en_US") ||
-                      voices.find(v => v.lang && v.lang.startsWith("en"));
-    selectedVoice = defaultEn || voices[0];
+    selectedVoice = voices[0];
   }
 
   if (window.speechSynthesis) {
@@ -290,7 +349,6 @@
     }
   }
 
-  // Unlock browser audio context and Web Speech API on user interaction
   function unlockAudio() {
     getAudioContext();
     if (!audioUnlocked && window.speechSynthesis) {
@@ -304,21 +362,18 @@
           btnStartSession.className = "btn-ghost";
           btnStartSession.style.color = "#18181b";
         }
-      } catch (err) {
-        console.warn("SpeechSynthesis unlock note:", err);
-      }
+      } catch (err) {}
     }
   }
 
   if (btnStartSession) {
     btnStartSession.addEventListener("click", () => {
       unlockAudio();
-      speakFormError("Session started. Audio feedback enabled.");
+      speakFormError("Session started. Audio coaching enabled.");
     });
   }
   document.addEventListener("click", unlockAudio);
 
-  // Client-side Web Speech API playback with natural tuning and 4-second delay throttle
   function speakFormError(errorMessage) {
     if (!voiceEnabled || !window.speechSynthesis || !errorMessage) return;
     const now = Date.now();
@@ -331,21 +386,15 @@
       if (selectedVoice) {
         utter.voice = selectedVoice;
         utter.lang = selectedVoice.lang || "en-US";
-      } else {
-        utter.lang = "en-US";
       }
-      // Tune speech parameters for human-like cadence: pitch 1.0, rate 1.05, volume 1.0
       utter.pitch = 1.0;
       utter.rate = 1.05;
       utter.volume = 1.0;
       window.speechSynthesis.speak(utter);
       lastSpokenTime = now;
-    } catch (e) {
-      console.warn("SpeechSynthesis error:", e);
-    }
+    } catch (e) {}
   }
 
-  // Poll lightweight endpoint /api/audio_alert every 500ms
   async function pollAudioAlert() {
     try {
       const res = await fetch("/api/audio_alert");
@@ -362,7 +411,7 @@
 
   if (workoutSaveForm) {
     workoutSaveForm.addEventListener("submit", () => {
-      if (hiddenRepCount) hiddenRepCount.value = lastRepCount;
+      if (hiddenRepCount) hiddenRepCount.value = lastRepCount || 0;
       if (hiddenDuration) hiddenDuration.value = currentDuration;
       if (hiddenAccuracy) hiddenAccuracy.value = currentAccuracy;
     });
@@ -371,47 +420,38 @@
   btnVoiceToggle.addEventListener("click", () => {
     voiceEnabled = !voiceEnabled;
     if (voiceEnabled) {
-      btnVoiceToggle.className = "btn-ghost";
-      voiceLabel.textContent = "Vocal: ON (Errors Only)";
+      btnVoiceToggle.className = "btn-ghost voice-toggle-btn";
+      voiceLabel.textContent = "Errors Only";
     } else {
-      btnVoiceToggle.className = "btn-ghost";
+      btnVoiceToggle.className = "btn-ghost voice-toggle-btn";
       btnVoiceToggle.style.color = "var(--accent-red)";
-      voiceLabel.textContent = "Vocal: MUTED";
+      voiceLabel.textContent = "Muted";
       if (window.speechSynthesis) window.speechSynthesis.cancel();
     }
   });
 
-  // Pause / Resume camera resource handling
   btnPauseCamera.addEventListener("click", async () => {
     isCameraPaused = !isCameraPaused;
     if (isCameraPaused) {
       pauseIcon.textContent = "▶️";
-      pauseText.textContent = "Resume Camera";
-      btnPauseCamera.className = "btn-ghost";
+      pauseText.textContent = "Resume Feed";
       await fetch("/pause_feed", { method: "POST" });
       videoFeedImg.src = "";
     } else {
       pauseIcon.textContent = "⏸️";
-      pauseText.textContent = "Pause Camera";
-      btnPauseCamera.className = "btn-ghost";
+      pauseText.textContent = "Pause Feed";
       await fetch("/resume_feed", { method: "POST" });
       videoFeedImg.src = "/video_feed?t=" + Date.now();
     }
   });
 
-  // Ensure camera VideoCapture resource releases properly when leaving or pausing /workout
-  window.addEventListener("pagehide", () => {
-    navigator.sendBeacon("/pause_feed");
-  });
-  window.addEventListener("beforeunload", () => {
-    navigator.sendBeacon("/pause_feed");
-  });
+  window.addEventListener("pagehide", () => { navigator.sendBeacon("/pause_feed"); });
+  window.addEventListener("beforeunload", () => { navigator.sendBeacon("/pause_feed"); });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") {
-      navigator.sendBeacon("/pause_feed");
-    }
+    if (document.visibilityState === "hidden") navigator.sendBeacon("/pause_feed");
   });
 
+  // Telemetry update handler
   function updateTelemetry(data) {
     if (!data) return;
 
@@ -422,17 +462,30 @@
     } else if (data.reps !== lastRepCount) {
       if (data.reps > lastRepCount) {
         playRepChime();
+        // Rep Counter Visual Effect: Scale Pulse, Glowing Neon Accent Ring (#facc15), & Particle Burst
+        triggerRepParticleBurst();
+
+        if (hudRepPillContainer) {
+          hudRepPillContainer.classList.add("rep-counter-glow");
+          hudRepPillContainer.classList.add("rep-pulse");
+        }
+        if (mainRepBox) {
+          mainRepBox.classList.add("rep-box-glow");
+        }
+        repsEl.classList.add("rep-pulse");
+
+        setTimeout(() => {
+          if (hudRepPillContainer) {
+            hudRepPillContainer.classList.remove("rep-counter-glow");
+            hudRepPillContainer.classList.remove("rep-pulse");
+          }
+          if (mainRepBox) {
+            mainRepBox.classList.remove("rep-box-glow");
+          }
+          repsEl.classList.remove("rep-pulse");
+        }, 450);
       }
       lastRepCount = data.reps;
-      repsEl.textContent = data.reps;
-      if (hudRepCount) hudRepCount.textContent = data.reps;
-      repsEl.style.transform = "scale(1.15)";
-      if (hudRepCount) hudRepCount.style.transform = "scale(1.2)";
-      setTimeout(() => {
-        repsEl.style.transform = "scale(1)";
-        if (hudRepCount) hudRepCount.style.transform = "scale(1)";
-      }, 180);
-    } else {
       repsEl.textContent = data.reps;
       if (hudRepCount) hudRepCount.textContent = data.reps;
     }
@@ -516,15 +569,10 @@
         hudScorePill.style.background = "rgba(250, 204, 21, 0.18)";
       }
     }
-
-    // Trigger speech ONLY on specific form errors with 4s debounce
-    if (data.audio_event && data.audio_event.startsWith("warn_") && data.vocal_message) {
-      speakFormError(data.vocal_message);
-    }
   }
 
+  // Poll /status endpoint
   async function pollStatus() {
-    if (currentInputSource === "browser_cam" || isCameraPaused) return;
     try {
       const res = await fetch("/status");
       if (res.ok) {
@@ -533,155 +581,60 @@
       }
     } catch (e) {}
   }
-  setInterval(pollStatus, 250);
+  setInterval(pollStatus, 150);
 
-  // Exercise Mode switching using Bento Pills
-  modePills.forEach(pill => {
-    pill.addEventListener("click", async () => {
-      modePills.forEach(p => p.classList.remove("active"));
-      pill.classList.add("active");
-      const selected = pill.getAttribute("data-exercise");
-      exerciseSelect.value = selected;
-
-      if (selected === 'squat') {
-        hiddenExerciseType.value = 'Squats';
-      } else if (selected === 'pushup') {
-        hiddenExerciseType.value = 'Push-Ups';
+  // Exercise Mode Switcher Pill logic
+  async function switchExercise(ex) {
+    modePills.forEach(p => {
+      if (p.getAttribute("data-exercise") === ex) {
+        p.classList.add("active");
       } else {
-        hiddenExerciseType.value = 'Dumbbell Curls';
+        p.classList.remove("active");
       }
+    });
+    if (exerciseSelect) exerciseSelect.value = ex;
+    if (hiddenExercise) {
+      hiddenExercise.value = ex === "squat" ? "Squats" : (ex === "pushup" ? "Push-Ups" : "Dumbbell Curls");
+    }
+    await fetch("/set_exercise", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ exercise: ex })
+    });
+    videoFeedImg.src = "/video_feed?t=" + Date.now();
+  }
 
-      await fetch("/set_exercise", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ exercise: selected })
-      });
-      if (!isCameraPaused) {
-        videoFeedImg.src = "/video_feed?t=" + Date.now();
-      }
+  modePills.forEach(pill => {
+    pill.addEventListener("click", () => {
+      const ex = pill.getAttribute("data-exercise");
+      switchExercise(ex);
     });
   });
 
-  sourceSelect.addEventListener("change", async () => {
-    const selected = sourceSelect.value;
-    currentInputSource = selected;
+  // Auto-switch mode if URL has query parameter e.g. /workout?exercise=pushup
+  const urlParams = new URLSearchParams(window.location.search);
+  const exParam = urlParams.get('exercise');
+  if (exParam && ['squat', 'pushup', 'curl'].includes(exParam.toLowerCase())) {
+    switchExercise(exParam.toLowerCase());
+  }
 
-    if (selected !== "browser_cam" && webcamStream) {
-      isCapturing = false;
-      webcamStream.getTracks().forEach(t => t.stop());
-      webcamStream = null;
-      clientWebcam.srcObject = null;
-      if (currentBlobUrl) {
-        URL.revokeObjectURL(currentBlobUrl);
-        currentBlobUrl = null;
-      }
-    }
-
-    if (selected === "browser_cam") {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert("Webcam access not supported in this browser.");
-        sourceSelect.value = "demo";
-        currentInputSource = "demo";
-        return;
-      }
-      try {
-        webcamStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
-          audio: false
-        });
-        clientWebcam.srcObject = webcamStream;
-        await clientWebcam.play();
-
-        await fetch("/set_source", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ source: "browser_cam" })
-        });
-
-        isCapturing = true;
-        runCameraCaptureLoop();
-      } catch(err) {
-        alert("Could not access browser camera: " + err.message);
-        sourceSelect.value = "demo";
-        currentInputSource = "demo";
-      }
-    } else {
-      const res = await fetch("/set_source", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: selected })
-      });
-      const data = await res.json();
-      if (!isCameraPaused) {
-        videoFeedImg.src = "/video_feed?t=" + Date.now();
-      }
-      if (selected === "webcam" && data.source === "demo") {
-        alert("Physical webcam device 0 is unavailable. Falling back to demo video.");
-        sourceSelect.value = "demo";
-      }
-    }
+  // Source Selector handler
+  sourceSelect.addEventListener("change", async (e) => {
+    const val = e.target.value;
+    await fetch("/set_source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: val })
+    });
+    videoFeedImg.src = "/video_feed?t=" + Date.now();
   });
 
-  btnReset.addEventListener("click", async () => {
+  // Reset Reps Handler
+  btnResetSession.addEventListener("click", async () => {
     await fetch("/reset", { method: "POST" });
     lastRepCount = 0;
     repsEl.textContent = "0";
     if (hudRepCount) hudRepCount.textContent = "0";
-    sessionTimerEl.textContent = "00:00";
   });
-
-  function runCameraCaptureLoop() {
-    if (!isCapturing || currentInputSource !== "browser_cam") return;
-
-    if (clientWebcam.readyState >= 2) {
-      const vw = clientWebcam.videoWidth || 640;
-      const vh = clientWebcam.videoHeight || 480;
-      captureCanvas.width = 640;
-      captureCanvas.height = 480;
-
-      captureCtx.save();
-      captureCtx.translate(640, 0);
-      captureCtx.scale(-1, 1);
-      captureCtx.drawImage(clientWebcam, 0, 0, 640, 480);
-      captureCtx.restore();
-
-      captureCanvas.toBlob(async (blob) => {
-        if (!blob || !isCapturing || currentInputSource !== "browser_cam") {
-          if (isCapturing) requestAnimationFrame(runCameraCaptureLoop);
-          return;
-        }
-
-        try {
-          const res = await fetch("/process_frame", {
-            method: "POST",
-            body: blob,
-            headers: { "Content-Type": "image/jpeg" }
-          });
-
-          if (res.ok) {
-            const metricsHeader = res.headers.get("X-Metrics");
-            if (metricsHeader) {
-              try {
-                const metrics = JSON.parse(decodeURIComponent(metricsHeader));
-                updateTelemetry(metrics);
-              } catch(e) {}
-            }
-
-            const processedBlob = await res.blob();
-            const newUrl = URL.createObjectURL(processedBlob);
-            videoFeedImg.src = newUrl;
-            if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
-            currentBlobUrl = newUrl;
-          }
-        } catch(e) {}
-
-        if (isCapturing && currentInputSource === "browser_cam") {
-          requestAnimationFrame(runCameraCaptureLoop);
-        }
-      }, "image/jpeg", 0.65);
-
-    } else {
-      requestAnimationFrame(runCameraCaptureLoop);
-    }
-  }
 </script>
+{% endblock %}

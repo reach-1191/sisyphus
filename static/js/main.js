@@ -378,32 +378,39 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Threshold slider live displays
-  downThInput.addEventListener('input', () => {
-    downThVal.innerHTML = `${downThInput.value}&deg;`;
-    downThDisp.textContent = downThInput.value;
-  });
+  if (downThInput) {
+    downThInput.addEventListener('input', () => {
+      if (downThVal) downThVal.innerHTML = `${downThInput.value}&deg;`;
+      if (downThDisp) downThDisp.textContent = downThInput.value;
+    });
+  }
 
-  upThInput.addEventListener('input', () => {
-    upThVal.innerHTML = `${upThInput.value}&deg;`;
-    upThDisp.textContent = upThInput.value;
-  });
+  if (upThInput) {
+    upThInput.addEventListener('input', () => {
+      if (upThVal) upThVal.innerHTML = `${upThInput.value}&deg;`;
+      if (upThDisp) upThDisp.textContent = upThInput.value;
+    });
+  }
 
   // Save Thresholds
-  btnApplyThresholds.addEventListener('click', async () => {
-    const down = parseFloat(downThInput.value);
-    const up = parseFloat(upThInput.value);
+  if (btnApplyThresholds) {
+    btnApplyThresholds.addEventListener('click', async () => {
+      if (!downThInput || !upThInput) return;
+      const down = parseFloat(downThInput.value);
+      const up = parseFloat(upThInput.value);
 
-    if (down >= up) {
-      alert('Squat depth angle must be less than upright standing angle!');
-      return;
-    }
+      if (down >= up) {
+        alert('Squat depth angle must be less than upright standing angle!');
+        return;
+      }
 
-    await fetch('/set_thresholds', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ down_threshold: down, up_threshold: up }),
+      await fetch('/set_thresholds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ down_threshold: down, up_threshold: up }),
+      });
+
+      if (feedbackMsgEl) feedbackMsgEl.textContent = `Thresholds updated: Depth <= ${down}°, Stand >= ${up}°`;
     });
-
-    feedbackMsgEl.textContent = `Thresholds updated: Depth <= ${down}°, Stand >= ${up}°`;
-  });
+  }
 });

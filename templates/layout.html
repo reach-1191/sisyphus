@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>{% block title %}Sisyphus AI Coach - Smart Form Tracker{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    /* Inline base variables and reset for instantaneous rendering */
+    :root {
+      --bg-main: #f7f7f8;
+      --card-bg: #ffffff;
+      --card-border: #e5e7eb;
+      --card-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.04), 0 8px 10px -6px rgba(0, 0, 0, 0.02);
+      --card-shadow-hover: 0 20px 30px -10px rgba(0, 0, 0, 0.08);
+      --yellow: #facc15;
+      --yellow-hover: #eab308;
+      --yellow-light: #fef08a;
+      --yellow-subtle: rgba(250, 204, 21, 0.16);
+      --charcoal: #18181b;
+      --charcoal-hover: #27272a;
+      --charcoal-border: #27272a;
+      --text-primary: #18181b;
+      --text-secondary: #71717a;
+      --text-muted: #a1a1aa;
+      --accent-green: #10b981;
+      --accent-red: #ef4444;
+      --accent-blue: #3b82f6;
+      --radius-bento: 20px;
+      --radius-pill: 9999px;
+    }
+  </style>
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <!-- Top Navigation Bar with Clean Icon Tabs -->
+  <header class="navbar-container">
+    <nav class="navbar-floating">
+      <a href="/" class="logo-text">
+        <span>Sisyphus</span>
+        <span class="logo-dot"></span>
+        <span class="logo-badge">Smart Form</span>
+      </a>
+
+      <!-- Clean Icon Navigation Tabs -->
+      <div class="nav-pills">
+        {% if current_user.is_authenticated %}
+          <a href="/dashboard" class="nav-pill {% if request.path in ['/', '/dashboard'] %}active{% endif %}">
+            <span class="nav-tab-icon">📊</span>
+            <span>Dashboard</span>
+          </a>
+          <a href="/workout" class="nav-pill {% if request.path == '/workout' %}active{% endif %}">
+            <span class="nav-tab-icon">🏋️</span>
+            <span>Start Workout</span>
+          </a>
+          <a href="/dashboard#history" class="nav-pill">
+            <span class="nav-tab-icon">📜</span>
+            <span>History</span>
+          </a>
+          <a href="/dashboard#profile" class="nav-pill">
+            <span class="nav-tab-icon">👤</span>
+            <span>Profile</span>
+          </a>
+        {% else %}
+          <a href="/login" class="nav-pill {% if request.path == '/login' %}active{% endif %}">
+            <span class="nav-tab-icon">🔑</span>
+            <span>Login</span>
+          </a>
+          <a href="/register" class="nav-pill {% if request.path == '/register' %}active{% endif %}">
+            <span class="nav-tab-icon">✨</span>
+            <span>Register</span>
+          </a>
+        {% endif %}
+      </div>
+
+      <!-- Right User Status & Actions -->
+      <div class="user-badge-wrap">
+        {% if current_user.is_authenticated %}
+          <div class="user-avatar" title="{{ current_user.username }}">{{ current_user.username[0]|upper }}</div>
+          <div class="user-meta-info">
+            <div class="user-meta-name">{{ current_user.username }}</div>
+            <div class="user-meta-level">Level {{ current_user.level }} Athlete</div>
+          </div>
+          <a href="/logout" class="nav-pill logout-btn" title="Sign Out">
+            <span>🚪</span>
+            <span class="logout-text">Logout</span>
+          </a>
+        {% else %}
+          <a href="/register" class="btn-yellow join-btn">Join Sisyphus</a>
+        {% endif %}
+      </div>
+    </nav>
+  </header>
+
+  <!-- Main View Container -->
+  <main class="container">
+    <!-- Flashed Notification Alerts -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-messages-group">
+          {% for category, message in messages %}
+            <div class="alert-box alert-{{ category }}">
+              <span class="alert-icon">⚡</span>
+              <span class="alert-text">{{ message }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Level-Up Celebration Modal Overlay -->
+  <div id="level-up-modal" class="modal-overlay" style="display: none;">
+    <div class="level-up-card">
+      <div class="confetti-burst">🎉 ✨ ⚡ 🏆 🌟</div>
+      <div class="level-up-badge">LEVEL UP!</div>
+      <h2 id="level-up-title" class="level-up-heading">You Reached Level 2!</h2>
+      <p id="level-up-desc" class="level-up-sub">Your movement accuracy and discipline are leveling up. Keep crushing your fitness goals!</p>
+      <div class="level-up-stat-row">
+        <div class="level-up-pill">+EXP Gained</div>
+        <div class="level-up-pill">Form Perfectionist</div>
+      </div>
+      <button type="button" class="btn-yellow level-up-btn" onclick="closeLevelUpModal()">
+        Continue Training
+      </button>
+    </div>
+  </div>
+
+  <script>
+    function showLevelUpModal(level, exp) {
+      const modal = document.getElementById('level-up-modal');
+      const title = document.getElementById('level-up-title');
+      if (title) title.textContent = `You Reached Level ${level}!`;
+      if (modal) modal.style.display = 'flex';
+    }
+    function closeLevelUpModal() {
+      const modal = document.getElementById('level-up-modal');
+      if (modal) modal.style.display = 'none';
+    }
+  </script>
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>

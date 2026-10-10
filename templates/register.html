@@ -1,0 +1,55 @@
+{% extends "layout.html" %}
+
+{% block title %}Register - Sisyphus AI Coach{% endblock %}
+
+{% block content %}
+<div class="auth-wrapper">
+  <div class="bento-card auth-card">
+    <div class="auth-header">
+      <div class="auth-icon-badge">
+        ⚡
+      </div>
+      <h2 class="auth-title">Create Account</h2>
+      <p class="auth-subtitle">Join Sisyphus AI to start tracking your form and leveling up</p>
+    </div>
+
+    <form method="POST" action="/register" class="auth-form">
+      <div class="form-group">
+        <label for="username" class="form-label">Username</label>
+        <input 
+          type="text" 
+          id="username" 
+          name="username" 
+          placeholder="e.g. alex_fitness" 
+          required 
+          autocomplete="username" 
+          class="auth-input"
+        >
+      </div>
+
+      <div class="form-group">
+        <label for="password" class="form-label">Password</label>
+        <input 
+          type="password" 
+          id="password" 
+          name="password" 
+          placeholder="••••••••" 
+          required 
+          autocomplete="new-password" 
+          class="auth-input"
+        >
+      </div>
+
+      <button type="submit" class="btn-yellow auth-submit-btn">
+        <span>Sign Up</span>
+        <span>→</span>
+      </button>
+    </form>
+
+    <div class="auth-footer">
+      <span>Already have an account?</span>
+      <a href="/login" class="auth-link">Log In</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

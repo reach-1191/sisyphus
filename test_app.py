@@ -162,6 +162,97 @@ class ExerciseTrackerTestCase(unittest.TestCase):
         self.assertIn('alert', data)
         self.assertIn('timestamp', data)
 
+    def test_adaptive_welcome_messaging_new_user(self):
+        with app.app_context():
+            new_u = User.query.filter_by(username='new_athlete').first()
+            if not new_u:
+                new_u = User(username='new_athlete')
+                new_u.set_password('pass123')
+                db.session.add(new_u)
+                db.session.commit()
+
+        self.app.post('/login', data={'username': 'new_athlete', 'password': 'pass123'})
+        res = self.app.get('/dashboard')
+        self.assertEqual(res.status_code, 200)
+        self.assertIn(b'Welcome to Sisyphus, new_athlete! Ready to start your fitness journey?', res.data)
+        self.assertIn(b'Quick Onboarding Guide', res.data)
+
+    def test_adaptive_welcome_messaging_returning_user(self):
+        # test_user has logged workout sessions from test_exp_and_badge_saving
+        self.app.post('/login', data={'username': 'test_user', 'password': 'testpass123'})
+        res = self.app.get('/dashboard')
+        self.assertEqual(res.status_code, 200)
+        self.assertIn(b'Welcome back, test_user! Ready to crush today', res.data)
+        self.assertIn(b'Streak', res.data)
+
+    def test_visual_exercise_choice_cards(self):
+        self.app.post('/login', data={'username': 'test_user', 'password': 'testpass123'})
+        res = self.app.get('/dashboard')
+        self.assertEqual(res.status_code, 200)
+        self.assertIn(b'Glutes / Legs', res.data)
+        self.assertIn(b'Chest / Core', res.data)
+        self.assertIn(b'Biceps', res.data)
+        self.assertIn(b'Squats', res.data)
+        self.assertIn(b'Push-ups', res.data)
+        self.assertIn(b'Dumbbell Curls', res.data)
+
+    def test_summary_screen_and_form_review(self):
+        self.app.post('/login', data={'username': 'test_user', 'password': 'testpass123'})
+        # Save a session
+        res = self.app.post(
+            '/save_workout',
+            json={
+                'exercise_type': 'Squats',
+                'rep_count': 10,
+                'total_duration_seconds': 30.0,
+                'avg_form_accuracy': 88.0
+            }
+        )
+        data = json.loads(res.data)
+        session_id = data['session_id']
+
+        # Visit summary screen
+        res_summary = self.app.get(f'/summary/{session_id}')
+        self.assertEqual(res_summary.status_code, 200)
+        self.assertIn(b'Workout Completed!', res_summary.data)
+        self.assertIn(b'Movement Precision & Coach Feedback', res_summary.data)
+        self.assertIn(b'Optimal', res_summary.data)
+        self.assertIn(b'Squat depth consistent on 88% of reps', res_summary.data)
+        self.assertIn(b'Total Reps', res_summary.data)
+        self.assertIn(b'Session Duration', res_summary.data)
+        self.assertIn(b'Form Score', res_summary.data)
+        self.assertIn(b'EXP Earned', res_summary.data)
+
+    def test_save_workout_computed_form_accuracy(self):
+        self.app.post('/login', data={'username': 'test_user', 'password': 'testpass123'})
+        # Test computation of Form Accuracy from valid rep frame ratios vs warnings
+        res = self.app.post(
+            '/save_workout',
+            json={
+                'exercise_type': 'Push-Ups',
+                'rep_count': 12,
+                'total_duration_seconds': 40.0,
+                'valid_frames': 85,
+                'error_warnings': 15
+            }
+        )
+        data = json.loads(res.data)
+        self.assertTrue(data['success'])
+        # 85 / (85 + 15) = 85.0%
+        self.assertEqual(data['session']['avg_form_accuracy'], 85.0)
+
+    def test_login_and_register_pages(self):
+        res_login = self.app.get('/login')
+        self.assertEqual(res_login.status_code, 200)
+        self.assertIn(b'Welcome Back', res_login.data)
+        self.assertIn(b'auth-card', res_login.data)
+
+        res_reg = self.app.get('/register')
+        self.assertEqual(res_reg.status_code, 200)
+        self.assertIn(b'Create Account', res_reg.data)
+        self.assertIn(b'auth-card', res_reg.data)
+
 
 if __name__ == '__main__':
     unittest.main()
+

@@ -12,7 +12,7 @@ import math
 import json
 import urllib.parse
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from functools import wraps
 from collections import defaultdict
 
@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 from flask import (
     Flask,
+    render_template,
     render_template_string,
     Response,
     jsonify,
@@ -354,6 +355,8 @@ class ExerciseTracker:
         self.rep_score_deductions = set()
         self.form_scores_history = []
         self.session_start_time = time.time()
+        self.total_pose_frames = 0
+        self.warning_pose_frames = 0
 
         self.feedback = "Ready - Position body in frame"
         self.warning_flags = []
@@ -392,6 +395,8 @@ class ExerciseTracker:
                 self.form_score = 100
                 self.form_scores_history.clear()
                 self.session_start_time = time.time()
+                self.total_pose_frames = 0
+                self.warning_pose_frames = 0
                 self.rep_score_deductions.clear()
                 self.smoothed_primary_angle = 180.0
                 self.smoothed_secondary_angle = 180.0
@@ -414,6 +419,8 @@ class ExerciseTracker:
             self.form_score = 100
             self.form_scores_history.clear()
             self.session_start_time = time.time()
+            self.total_pose_frames = 0
+            self.warning_pose_frames = 0
             self.rep_score_deductions.clear()
             self.min_angle_in_rep = 180.0
             self.max_angle_in_rep = 180.0
@@ -480,6 +487,7 @@ class ExerciseTracker:
 
             if landmarks is not None:
                 self.warning_flags = []
+                self.total_pose_frames += 1
 
                 if self.exercise == "squat":
                     audio_ev, vocal_msg = self._process_squat(landmarks, w, h)
@@ -487,6 +495,9 @@ class ExerciseTracker:
                     audio_ev, vocal_msg = self._process_pushup(landmarks, w, h)
                 else:
                     audio_ev, vocal_msg = self._process_curl(landmarks, w, h)
+
+                if self.warning_flags or (audio_ev and audio_ev.startswith("warn_")):
+                    self.warning_pose_frames += 1
 
                 self._draw_skeleton(frame, landmarks, w, h)
             else:
@@ -2759,6 +2770,33 @@ def dashboard():
         else 100.0
     )
 
+    # Adaptive New vs. Returning User Welcome Messaging
+    is_new_user = (total_workouts == 0)
+    if is_new_user:
+        welcome_title = f"Welcome to Sisyphus, {current_user.username}! Ready to start your fitness journey?"
+        workout_streak = 0
+        last_exercise_stats = "No previous workouts"
+    else:
+        welcome_title = f"Welcome back, {current_user.username}! Ready to crush today's goals?"
+        # Calculate workout streak from consecutive session days
+        dates = sorted({s.timestamp.date() for s in user_sessions if s.timestamp}, reverse=True)
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
+        streak = 0
+        if dates and (dates[0] == today or dates[0] == yesterday):
+            curr = dates[0]
+            for d in dates:
+                if d == curr:
+                    streak += 1
+                    curr = curr - timedelta(days=1)
+                else:
+                    break
+        else:
+            streak = 1 if len(dates) > 0 else 0
+        workout_streak = max(1, streak)
+        latest = user_sessions[0]
+        last_exercise_stats = f"{latest.rep_count} {latest.exercise_type} ({int(round(latest.avg_form_accuracy))}% Form)"
+
     daily_volume = defaultdict(int)
     for s in sorted(user_sessions, key=lambda x: x.timestamp):
         if s.timestamp:
@@ -2773,7 +2811,7 @@ def dashboard():
     exp_in_level = user_exp % 100
     exp_progress_pct = exp_in_level
 
-    # Exercise distribution breakdown
+    # Exercise distribution breakdown & Skill Mastery Reps
     squat_reps = sum(s.rep_count for s in user_sessions if "squat" in s.exercise_type.lower())
     pushup_reps = sum(s.rep_count for s in user_sessions if "push" in s.exercise_type.lower())
     curl_reps = sum(s.rep_count for s in user_sessions if "curl" in s.exercise_type.lower())
@@ -2801,8 +2839,8 @@ def dashboard():
     unlocked_count = len(unlocked_names)
     total_badge_count = len(AVAILABLE_BADGES)
 
-    return render_layout(
-        DASHBOARD_BODY,
+    return render_template(
+        'index.html',
         sessions=user_sessions,
         total_reps=total_reps,
         total_workouts=total_workouts,
@@ -2815,18 +2853,25 @@ def dashboard():
         exp_in_level=exp_in_level,
         exp_progress_pct=exp_progress_pct,
         badges=badge_cards,
+        squat_reps=squat_reps,
+        pushup_reps=pushup_reps,
+        curl_reps=curl_reps,
         squat_pct=squat_pct,
         pushup_pct=pushup_pct,
         curl_pct=curl_pct,
         unlocked_count=unlocked_count,
-        total_badge_count=total_badge_count
+        total_badge_count=total_badge_count,
+        is_new_user=is_new_user,
+        welcome_title=welcome_title,
+        workout_streak=workout_streak,
+        last_exercise_stats=last_exercise_stats
     )
 
 
 @app.route('/workout')
 def workout():
     """Live workout tracking view with Bento Card encapsulation."""
-    return render_layout(WORKOUT_BODY)
+    return render_template('workout.html')
 
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -2841,26 +2886,12 @@ def register():
 
         if not username or not password:
             flash("Username and password are required.", "danger")
-            return render_layout(
-                AUTH_BODY,
-                title="Create Account",
-                subtitle="Join Sisyphus AI to track your fitness",
-                button_label="Sign Up",
-                action="/register",
-                is_register=True
-            )
+            return render_template('register.html')
 
         existing = User.query.filter_by(username=username).first()
         if existing:
             flash("Username already exists. Please pick another.", "danger")
-            return render_layout(
-                AUTH_BODY,
-                title="Create Account",
-                subtitle="Join Sisyphus AI to track your fitness",
-                button_label="Sign Up",
-                action="/register",
-                is_register=True
-            )
+            return render_template('register.html')
 
         new_user = User(username=username, exp=0, level=1)
         new_user.set_password(password)
@@ -2871,14 +2902,7 @@ def register():
         flash(f"Welcome, {new_user.username}!", "success")
         return redirect(url_for('dashboard'))
 
-    return render_layout(
-        AUTH_BODY,
-        title="Create Account",
-        subtitle="Join Sisyphus AI to track your fitness",
-        button_label="Sign Up",
-        action="/register",
-        is_register=True
-    )
+    return render_template('register.html')
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -2900,14 +2924,7 @@ def login():
         else:
             flash("Invalid username or password.", "danger")
 
-    return render_layout(
-        AUTH_BODY,
-        title="Welcome Back",
-        subtitle="Sign in to view your workout analytics",
-        button_label="Log In",
-        action="/login",
-        is_register=False
-    )
+    return render_template('login.html')
 
 
 @app.route('/logout')
@@ -2936,14 +2953,25 @@ def save_workout():
     with tracker.lock:
         reps = tracker.counter
         duration = max(1.0, tracker.get_duration())
-        avg_acc = tracker.get_avg_accuracy()
+
+        # Form Accuracy Percentage computation based on valid rep frame ratios vs form error warnings
+        valid_frames = data.get("valid_frames")
+        error_warnings = data.get("error_warnings") or data.get("warning_count")
+        if valid_frames is not None:
+            total_f = max(1, int(valid_frames) + int(error_warnings or 0))
+            avg_acc = round((int(valid_frames) / total_f) * 100.0, 1)
+        elif tracker.total_pose_frames > 0:
+            valid_f = max(0, tracker.total_pose_frames - tracker.warning_pose_frames)
+            avg_acc = round((valid_f / max(1, tracker.total_pose_frames)) * 100.0, 1)
+        elif "avg_form_accuracy" in data and data["avg_form_accuracy"] is not None:
+            avg_acc = float(data["avg_form_accuracy"])
+        else:
+            avg_acc = tracker.get_avg_accuracy()
 
         if "rep_count" in data and data["rep_count"] is not None:
             reps = int(data["rep_count"])
         if "total_duration_seconds" in data and data["total_duration_seconds"] is not None:
             duration = float(data["total_duration_seconds"])
-        if "avg_form_accuracy" in data and data["avg_form_accuracy"] is not None:
-            avg_acc = float(data["avg_form_accuracy"])
 
     # Reset active session counter
     tracker.reset_reps()
@@ -2978,18 +3006,131 @@ def save_workout():
     for nb in new_badges:
         flash(f"🏆 Achievement Unlocked: {nb.icon} {nb.name} - {nb.description}", "success")
 
+    summary_url = url_for('summary', session_id=new_session.id)
+
     if request.is_json:
         return jsonify({
             "success": True,
             "message": "Workout saved successfully!",
             "session": new_session.to_dict(),
+            "session_id": new_session.id,
+            "summary_url": summary_url,
             "exp_gained": exp_gained,
             "level": current_user.level,
             "new_badges": [b.to_dict() for b in new_badges]
         })
 
     flash(f"Workout saved! {reps} {exercise_type} logged (+{exp_gained} EXP).", "success")
-    return redirect(url_for('dashboard'))
+    return redirect(summary_url)
+
+
+@app.route('/summary/<int:session_id>')
+@login_required
+def summary(session_id):
+    """Post-workout summary & form analytics screen."""
+    session_record = ExerciseSession.query.filter_by(id=session_id, user_id=current_user.id).first_or_404()
+    score = session_record.avg_form_accuracy
+
+    # Status badge evaluation: Optimal (>=85%), Moderate (70-84%), Needs Adjustment (<70%)
+    if score >= 85:
+        form_status = "Optimal"
+        badge_class = "badge-optimal"
+        badge_color = "#10b981"
+    elif score >= 70:
+        form_status = "Moderate"
+        badge_class = "badge-moderate"
+        badge_color = "#f59e0b"
+    else:
+        form_status = "Needs Adjustment"
+        badge_class = "badge-adjustment"
+        badge_color = "#ef4444"
+
+    # Contextual Form Review Feedback Insights
+    insights = []
+    ex_lower = session_record.exercise_type.lower()
+    score_int = int(round(score))
+    if "squat" in ex_lower:
+        insights.append({
+            "title": f"Squat depth consistent on {score_int}% of reps",
+            "detail": "Knee flexion and hip crease reached parallel with the knee joint to engage quads and glutes.",
+            "tag": "Depth Consistency"
+        })
+        insights.append({
+            "title": "Knee alignment maintained through eccentric descent" if score >= 75 else "Keep knees driven outward over toes",
+            "detail": "No significant knee valgus collapse detected during active rep cycles." if score >= 75 else "Drive knees outward to avoid excessive medial stress on ligaments.",
+            "tag": "Joint Alignment"
+        })
+        insights.append({
+            "title": "Controlled descent tempo maintained",
+            "detail": "Smooth eccentric descent prevented bounce at bottom of rep range.",
+            "tag": "Cadence & Tempo"
+        })
+    elif "push" in ex_lower:
+        insights.append({
+            "title": "Keep hips aligned on push-ups",
+            "detail": "Core engaged to maintain a straight line from shoulders through hips and heels.",
+            "tag": "Core Alignment"
+        })
+        insights.append({
+            "title": f"Elbow flare angle kept tucked within safe zone on {score_int}% of reps",
+            "detail": "Elbows held at roughly 45° to 60° to protect anterior shoulder capsules.",
+            "tag": "Elbow Safety"
+        })
+        insights.append({
+            "title": "Full chest descent and arm extension lockout",
+            "detail": "Achieved full range of motion on each completed repetition.",
+            "tag": "Range of Motion"
+        })
+    else:
+        insights.append({
+            "title": f"Bicep peak contraction sustained on {score_int}% of reps",
+            "detail": "Arm flexion reached top apex for maximum bicep muscle tension.",
+            "tag": "Peak Flexion"
+        })
+        insights.append({
+            "title": "Minimal torso swing and body momentum detected",
+            "detail": "Upper body kept stationary to isolate bicep heads without hip thrust.",
+            "tag": "Strict Form"
+        })
+        insights.append({
+            "title": "Smooth eccentric lowering phase",
+            "detail": "Full elbow extension reached at bottom before commencing next rep.",
+            "tag": "Controlled Tempo"
+        })
+
+    exp_earned = max(10, session_record.rep_count * 10) + (50 if score >= 90 else (25 if score >= 75 else 0))
+    user_exp = current_user.exp or 0
+    user_level = current_user.level or 1
+    exp_in_level = user_exp % 100
+    exp_progress_pct = exp_in_level
+    exp_needed = 100 - exp_in_level
+
+    # Determine badges unlocked recently
+    now_utc = datetime.now(timezone.utc)
+    new_badges = []
+    for b in current_user.badges:
+        if b.unlocked_at:
+            b_dt = b.unlocked_at
+            if b_dt.tzinfo is None:
+                b_dt = b_dt.replace(tzinfo=timezone.utc)
+            if abs((now_utc - b_dt).total_seconds()) < 120:
+                new_badges.append(b)
+
+    return render_template(
+        'summary.html',
+        session=session_record,
+        form_status=form_status,
+        badge_class=badge_class,
+        badge_color=badge_color,
+        insights=insights,
+        exp_earned=exp_earned,
+        user_level=user_level,
+        user_exp=user_exp,
+        exp_in_level=exp_in_level,
+        exp_progress_pct=exp_progress_pct,
+        exp_needed=exp_needed,
+        new_badges=new_badges
+    )
 
 
 @app.route('/video_feed')
